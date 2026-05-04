@@ -17,8 +17,8 @@
 | fastapi | >=0.110.0 | 后端 Web 框架 |
 | uvicorn | >=0.27.0 | FastAPI 运行时 |
 | streamlit | >=1.30.0 | 前端 Web 框架 |
-| tavily-python | >=0.3.0 | Web 搜索（首选） |
-| duckduckgo-search | >=5.0.0 | Web 搜索（备选，无需 Key） |
+| tavily-python | >=0.3.0 | Web 搜索（默认正式路径） |
+| duckduckgo-search | >=5.0.0 | Web 搜索（显式开发备用） |
 | beautifulsoup4 | >=4.12.0 | HTML 解析 |
 | requests | >=2.31.0 | HTTP 请求 |
 | python-dotenv | >=1.0.0 | 环境变量加载 |
@@ -74,7 +74,7 @@ httpx>=0.27.0
 ```
 DEEPSEEK_API_KEY=sk-xxx
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-TAVILY_API_KEY=tvly-xxx           # 可选,优先使用 Tavily
+TAVILY_API_KEY=tvly-xxx
 MODEL_NAME=deepseek-v4-pro        # 可切换为 deepseek-v4-flash
 SEARCH_PROVIDER=tavily            # 或 duckduckgo
 MAX_RETRY=2
@@ -138,8 +138,10 @@ DeepSeek API 使用 OpenAI 兼容格式：
 
 Tavily 提供免费额度（每月 1000 次搜索），注册地址：https://tavily.com
 
-如不想注册，使用 DuckDuckGo：
+本项目默认使用 Tavily 进行联网搜索。缺少 `TAVILY_API_KEY` 时，真实搜索会明确失败，避免静默切换到其他搜索源。
+
+DuckDuckGo 仅作为显式开发备用：
 ```
 SEARCH_PROVIDER=duckduckgo
 ```
-（无需 API Key，但稳定性略差）
+（无需 API Key，但稳定性略差，不作为正式验收路径）

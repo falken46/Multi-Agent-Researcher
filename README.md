@@ -4,7 +4,7 @@
 
 ## 当前实现阶段
 
-当前处于 Phase 0：项目初始化与基础环境配置。
+当前处于 Phase 1：工具层实现。
 
 已确认的实现边界：
 
@@ -52,7 +52,7 @@ SEARCH_PROVIDER=tavily
 MAX_RETRY=2
 ```
 
-如果没有 Tavily Key，可将 `SEARCH_PROVIDER` 改为 `duckduckgo`。
+Phase 1 之后的联网搜索默认使用 Tavily。请在 `.env` 中配置 `TAVILY_API_KEY`，否则真实搜索会明确报错；`duckduckgo` 仅保留为显式开发备用选项。
 
 ## 目录结构
 

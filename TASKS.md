@@ -17,10 +17,10 @@
 
 ## Phase 1: 工具层实现（预计 1 天）
 
-- [ ] T1.1 实现 `tools/web_search.py`（Tavily 优先，DuckDuckGo 备选）
-- [ ] T1.2 实现 `tools/web_fetch.py`（requests + beautifulsoup4）
-- [ ] T1.3 编写 `tests/test_tools.py`，每个工具至少 2 个测试
-- [ ] T1.4 手动验证：在 Python REPL 中调用工具能返回真实数据
+- [x] T1.1 实现 `tools/web_search.py`（Tavily 优先，DuckDuckGo 备选）
+- [x] T1.2 实现 `tools/web_fetch.py`（requests + beautifulsoup4）
+- [x] T1.3 编写 `tests/test_tools.py`，每个工具至少 2 个测试
+- [ ] T1.4 手动验证：在 Python REPL 中调用工具能返回真实数据（等待 `.env` 写入 `TAVILY_API_KEY` 后验证 Tavily 搜索）
 
 **验收标准**：两个工具能独立工作并返回结构化数据
 
