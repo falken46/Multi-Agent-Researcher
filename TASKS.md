@@ -53,11 +53,11 @@
 
 ## Phase 4: Writer Agent（预计 0.5 天）
 
-- [ ] T4.1 编写 `prompts/writer_system.md`（含 Markdown 模板示例）
-- [ ] T4.2 实现 `agents/writer.py`：writer_node 函数
-- [ ] T4.3 实现 prompt 拼装（topic + questions + results）
-- [ ] T4.4 编写 `tests/test_writer.py`
-- [ ] T4.5 手动测试：用静态数据生成报告
+- [x] T4.1 编写 `prompts/writer_system.md`（含 Markdown 模板示例）
+- [x] T4.2 实现 `agents/writer.py`：writer_node 函数
+- [x] T4.3 实现 prompt 拼装（topic + questions + results）
+- [x] T4.4 编写 `tests/test_writer.py`
+- [x] T4.5 手动测试：用静态数据生成报告
 
 **验收标准**：能输出结构完整的 Markdown 报告
 
