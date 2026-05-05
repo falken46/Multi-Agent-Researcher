@@ -4,7 +4,7 @@
 
 ## 当前实现阶段
 
-当前处于 Phase 1：工具层实现。
+当前处于 Phase 3：Researcher Agent 实现。
 
 已确认的实现边界：
 

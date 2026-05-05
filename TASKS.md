@@ -40,12 +40,12 @@
 
 ## Phase 3: Researcher Agent（预计 1.5 天）
 
-- [ ] T3.1 编写 `prompts/researcher_system.md`
-- [ ] T3.2 实现 `agents/researcher.py`：researcher_node 函数
-- [ ] T3.3 实现子问题循环 + 工具调用 + 资料摘要
-- [ ] T3.4 实现错误捕获与 errors 日志写入
-- [ ] T3.5 编写 `tests/test_researcher.py`：mock 工具调用
-- [ ] T3.6 手动测试：单独运行，输入 3 个子问题，观察输出
+- [x] T3.1 编写 `prompts/researcher_system.md`
+- [x] T3.2 实现 `agents/researcher.py`：researcher_node 函数
+- [x] T3.3 实现子问题循环 + 工具调用 + 资料摘要
+- [x] T3.4 实现错误捕获与 errors 日志写入
+- [x] T3.5 编写 `tests/test_researcher.py`：mock 工具调用
+- [x] T3.6 手动测试：单独运行，输入 3 个子问题，观察输出
 
 **验收标准**：每个子问题都能产出含来源 URL 的资料摘要
 
