@@ -20,7 +20,7 @@
 - [x] T1.1 实现 `tools/web_search.py`（Tavily 优先，DuckDuckGo 备选）
 - [x] T1.2 实现 `tools/web_fetch.py`（requests + beautifulsoup4）
 - [x] T1.3 编写 `tests/test_tools.py`，每个工具至少 2 个测试
-- [ ] T1.4 手动验证：在 Python REPL 中调用工具能返回真实数据（等待 `.env` 写入 `TAVILY_API_KEY` 后验证 Tavily 搜索）
+- [x] T1.4 手动验证：在 Python REPL 中调用工具能返回真实数据
 
 **验收标准**：两个工具能独立工作并返回结构化数据
 
@@ -28,11 +28,11 @@
 
 ## Phase 2: 状态定义与 Planner Agent（预计 1 天）
 
-- [ ] T2.1 实现 `agents/state.py`：定义 ResearchState TypedDict
-- [ ] T2.2 编写 `prompts/planner_system.md`（含 2 个 Few-shot 示例）
-- [ ] T2.3 实现 `agents/planner.py`：planner_node 函数
-- [ ] T2.4 编写 `tests/test_planner.py`：mock LLM，验证 JSON 解析
-- [ ] T2.5 手动测试：单独运行 planner_node，验证输出结构
+- [x] T2.1 实现 `agents/state.py`：定义 ResearchState TypedDict
+- [x] T2.2 编写 `prompts/planner_system.md`（含 2 个 Few-shot 示例）
+- [x] T2.3 实现 `agents/planner.py`：planner_node 函数
+- [x] T2.4 编写 `tests/test_planner.py`：mock LLM，验证 JSON 解析
+- [x] T2.5 手动测试：单独运行 planner_node，验证输出结构
 
 **验收标准**：给定主题能稳定输出 3-5 个 JSON 格式的子问题
 
