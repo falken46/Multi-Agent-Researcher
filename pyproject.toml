@@ -5,7 +5,7 @@ description = "LangGraph-based multi-agent research assistant demo."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "anthropic>=0.40.0",
+    "openai>=1.0.0",
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
     "fastapi>=0.110.0",

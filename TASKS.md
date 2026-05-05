@@ -7,7 +7,7 @@
 - [x] T0.1 创建项目目录结构（按 ARCHITECTURE.md 4.目录结构）
 - [x] T0.2 初始化 git 仓库
 - [x] T0.3 创建 requirements.txt
-- [x] T0.4 创建 .env.example（ANTHROPIC_API_KEY, TAVILY_API_KEY）
+- [x] T0.4 创建 .env.example（DEEPSEEK_API_KEY, TAVILY_API_KEY）
 - [x] T0.5 创建 .gitignore
 - [x] T0.6 编写初版 README.md
 

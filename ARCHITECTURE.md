@@ -79,14 +79,17 @@ graph.add_edge("writer", END)
 def planner_node(state: ResearchState) -> ResearchState:
     """
     输入主题,输出子问题列表。
-    使用 Claude API 的结构化输出确保 JSON 格式。
+    使用 DeepSeek API 的结构化输出确保 JSON 格式。
     """
-    response = client.messages.create(
+    response = client.chat.completions.create(
         model=MODEL,
-        system=PLANNER_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": state["topic"]}],
+        messages=[
+            {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
+            {"role": "user", "content": state["topic"]},
+        ],
+        response_format={"type": "json_object"},
     )
-    sub_questions = parse_json_list(response.content[0].text)
+    sub_questions = parse_json_list(response.choices[0].message.content)
     return {"sub_questions": sub_questions}
 ```
 
@@ -149,19 +152,21 @@ def researcher_node(state: ResearchState) -> ResearchState:
 def writer_node(state: ResearchState) -> ResearchState:
     """
     将 sub_questions + research_results 拼接为 Prompt,
-    调用 Claude 生成 Markdown 报告。
+    调用 DeepSeek 生成 Markdown 报告。
     """
     prompt = build_writer_prompt(
         topic=state["topic"],
         questions=state["sub_questions"],
         results=state["research_results"],
     )
-    response = client.messages.create(
+    response = client.chat.completions.create(
         model=MODEL,
-        system=WRITER_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
+        messages=[
+            {"role": "system", "content": WRITER_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
     )
-    return {"final_report": response.content[0].text}
+    return {"final_report": response.choices[0].message.content}
 ```
 
 ### 2.5 工具层 (`tools/`)
@@ -281,7 +286,7 @@ multi-agent-research/
 | 决策点 | 选择 | 理由 |
 |--------|------|------|
 | Agent 框架 | LangGraph | 当前 Multi-Agent 编排事实标准 |
-| LLM API | Anthropic Claude | 统一使用，工具调用稳定 |
+| LLM API | DeepSeek API | 使用 OpenAI 兼容格式，便于 Chat Completions、JSON Output 与后续流式输出 |
 | Web Search | Tavily（备选 DuckDuckGo） | 免费额度足够 Demo |
 | 后端 | FastAPI | 异步原生支持 + SSE 流式 |
 | 前端 | Streamlit | 快速 Demo，无需前端工程 |

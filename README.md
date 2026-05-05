@@ -13,6 +13,7 @@
 - system prompt 后续统一放在 `prompts/*.md`。
 - `tools/` 只放外部 IO 工具，例如 `web_search` 和 `web_fetch`。
 - PRD 中提到的 `markdown_writer` 不作为独立工具实现，Markdown 报告生成由 `agents/writer.py` 中的 Writer Agent 负责。
+- LLM 接口使用 DeepSeek API 的 OpenAI 兼容格式。
 - Docker 暂不实施，后续按需进入容器化阶段。
 
 ## 环境配置
@@ -43,9 +44,10 @@ pip install -r requirements.txt
 复制 `.env.example` 为 `.env`，并填入实际 Key：
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-xxx
+DEEPSEEK_API_KEY=sk-xxx
+DEEPSEEK_BASE_URL=https://api.deepseek.com
 TAVILY_API_KEY=tvly-xxx
-MODEL_NAME=claude-sonnet-4-6
+MODEL_NAME=deepseek-v4-pro
 SEARCH_PROVIDER=tavily
 MAX_RETRY=2
 ```

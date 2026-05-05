@@ -11,7 +11,7 @@
 
 | 包名 | 版本 | 用途 |
 |------|------|------|
-| anthropic | >=0.40.0 | Claude API SDK |
+| openai | >=1.0.0 | DeepSeek API 的 OpenAI 兼容 SDK |
 | langgraph | >=0.2.0 | Multi-Agent 状态机框架 |
 | langchain-core | >=0.3.0 | LangGraph 依赖 |
 | fastapi | >=0.110.0 | 后端 Web 框架 |
@@ -38,7 +38,7 @@
 
 ```
 # Core
-anthropic>=0.40.0
+openai>=1.0.0
 langgraph>=0.2.0
 langchain-core>=0.3.0
 
@@ -72,9 +72,10 @@ httpx>=0.27.0
 `.env` 文件应包含：
 
 ```
-ANTHROPIC_API_KEY=sk-ant-xxx
+DEEPSEEK_API_KEY=sk-xxx
+DEEPSEEK_BASE_URL=https://api.deepseek.com
 TAVILY_API_KEY=tvly-xxx           # 可选,优先使用 Tavily
-MODEL_NAME=claude-sonnet-4-6      # 可切换为 claude-haiku-4-5
+MODEL_NAME=deepseek-v4-pro        # 可切换为 deepseek-v4-flash
 SEARCH_PROVIDER=tavily            # 或 duckduckgo
 MAX_RETRY=2
 ```
@@ -105,10 +106,10 @@ docker-compose up --build
 
 | 场景 | 推荐模型 | 理由 |
 |------|----------|------|
-| 开发调试 | claude-haiku-4-5 | 快速迭代，便宜 |
-| Planner | claude-sonnet-4-6 | 任务拆解需推理质量 |
-| Researcher | claude-haiku-4-5 | 摘要任务无需高推理 |
-| Writer | claude-sonnet-4-6 | 长文撰写需要质量 |
+| 开发调试 | deepseek-v4-flash | 快速迭代，成本较低 |
+| Planner | deepseek-v4-pro | 任务拆解需推理质量 |
+| Researcher | deepseek-v4-flash | 摘要任务无需高推理 |
+| Writer | deepseek-v4-pro | 长文撰写需要质量 |
 
 支持通过环境变量动态切换。
 
@@ -117,13 +118,23 @@ docker-compose up --build
 | 技术 | 原因 |
 |------|------|
 | LangChain（旧版） | 已被 LangGraph 替代 |
-| OpenAI SDK | 统一使用 Anthropic |
+| Anthropic SDK | 统一使用 DeepSeek API |
 | React/Vue 前端 | Demo 阶段 Streamlit 足够 |
 | 数据库 | Demo 无需持久化 |
 | Redis/MQ | 单用户场景无需 |
 | Kubernetes | Docker Compose 足以演示 |
 
-## 9. 关于 Tavily API Key
+## 9. 关于 DeepSeek API
+
+DeepSeek API 使用 OpenAI 兼容格式：
+
+- `DEEPSEEK_BASE_URL=https://api.deepseek.com`
+- `DEEPSEEK_API_KEY=sk-xxx`
+- 推荐模型：`deepseek-v4-pro` / `deepseek-v4-flash`
+
+旧模型名 `deepseek-chat` / `deepseek-reasoner` 将于 2026-07-24 弃用，新实现优先使用 `deepseek-v4-*`。
+
+## 10. 关于 Tavily API Key
 
 Tavily 提供免费额度（每月 1000 次搜索），注册地址：https://tavily.com
 

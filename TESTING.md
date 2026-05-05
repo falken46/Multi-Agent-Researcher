@@ -127,7 +127,7 @@ def test_full_graph_happy_path(mocker):
 # 验收报告
 
 测试日期：YYYY-MM-DD
-模型：claude-sonnet-4-6 / claude-haiku-4-5
+模型：deepseek-v4-pro / deepseek-v4-flash
 搜索引擎：Tavily
 
 ## 主题结果
