@@ -1,0 +1,37 @@
+[project]
+name = "multi-agent-research-assistant"
+version = "0.1.0"
+description = "LangGraph-based multi-agent research assistant demo."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "anthropic>=0.40.0",
+    "langgraph>=0.2.0",
+    "langchain-core>=0.3.0",
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "sse-starlette>=2.0.0",
+    "streamlit>=1.30.0",
+    "tavily-python>=0.3.0",
+    "duckduckgo-search>=5.0.0",
+    "beautifulsoup4>=4.12.0",
+    "requests>=2.31.0",
+    "python-dotenv>=1.0.0",
+    "rich>=13.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-mock>=3.10.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.27.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-p no:cacheprovider"
