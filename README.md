@@ -4,7 +4,7 @@
 
 ## 当前实现阶段
 
-当前处于 Phase 4：Writer Agent 实现。
+当前处于 Phase 5：LangGraph 状态机集成。
 
 已确认的实现边界：
 

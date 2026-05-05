@@ -65,12 +65,12 @@
 
 ## Phase 5: LangGraph 状态机集成（预计 1 天）
 
-- [ ] T5.1 实现 `agents/graph.py`：构建 StateGraph
-- [ ] T5.2 添加 planner → researcher → writer 主路径
-- [ ] T5.3 实现 `should_retry` 条件边逻辑
-- [ ] T5.4 添加 retry_count 上限保护（max=2）
-- [ ] T5.5 编写 `tests/test_graph.py`：端到端 mock 测试
-- [ ] T5.6 手动测试：完整运行一次"AI Agent 趋势"主题
+- [x] T5.1 实现 `agents/graph.py`：构建 StateGraph
+- [x] T5.2 添加 planner → researcher → writer 主路径
+- [x] T5.3 实现 `should_retry` 条件边逻辑
+- [x] T5.4 添加 retry_count 上限保护（max=2）
+- [x] T5.5 编写 `tests/test_graph.py`：端到端 mock 测试
+- [x] T5.6 手动测试：完整运行一次"AI Agent 趋势"主题
 
 **验收标准**：状态机能完整跑通三 Agent 流程，含失败重试
 

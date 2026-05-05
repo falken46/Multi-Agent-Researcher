@@ -52,7 +52,10 @@ def researcher_node(state: ResearchState) -> dict[str, object]:
         len(research_results),
         len(errors),
     )
-    return {"research_results": research_results, "errors": errors}
+    result: dict[str, object] = {"research_results": research_results, "errors": errors}
+    if sub_questions and not research_results:
+        result["retry_count"] = state.get("retry_count", 0) + 1
+    return result
 
 
 def _research_question(question: str, system_prompt: str) -> str:
