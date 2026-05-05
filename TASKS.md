@@ -78,12 +78,12 @@
 
 ## Phase 6: FastAPI 后端（预计 1 天）
 
-- [ ] T6.1 实现 `backend/api.py`：基础 FastAPI app
-- [ ] T6.2 实现 `/research` POST 接口
-- [ ] T6.3 实现 `backend/streaming.py`：SSE 流式推送
-- [ ] T6.4 集成 LangGraph 的 stream 模式（按 node 推送状态）
-- [ ] T6.5 添加 CORS 配置（允许 Streamlit 访问）
-- [ ] T6.6 手动测试：用 curl 触发并观察 SSE 输出
+- [x] T6.1 实现 `backend/api.py`：基础 FastAPI app
+- [x] T6.2 实现 `/research` POST 接口
+- [x] T6.3 实现 `backend/streaming.py`：SSE 流式推送
+- [x] T6.4 集成 LangGraph 的 stream 模式（按 node 推送状态）
+- [x] T6.5 添加 CORS 配置（允许 Streamlit 访问）
+- [x] T6.6 手动测试：用 curl 触发并观察 SSE 输出
 
 **验收标准**：后端能流式返回每个 Agent 的状态变更
 

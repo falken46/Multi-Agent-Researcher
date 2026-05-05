@@ -4,7 +4,7 @@
 
 ## 当前实现阶段
 
-当前处于 Phase 5：LangGraph 状态机集成。
+当前处于 Phase 6：FastAPI 后端。
 
 已确认的实现边界：
 
@@ -47,12 +47,21 @@ pip install -r requirements.txt
 DEEPSEEK_API_KEY=sk-xxx
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 TAVILY_API_KEY=tvly-xxx
-MODEL_NAME=deepseek-v4-pro
+MODEL_NAME=deepseek-v4-flash
 SEARCH_PROVIDER=tavily
 MAX_RETRY=2
 ```
 
 Phase 1 之后的联网搜索默认使用 Tavily。请在 `.env` 中配置 `TAVILY_API_KEY`，否则真实搜索会明确报错；`duckduckgo` 仅保留为显式开发备用选项。
+
+## 后端启动
+
+```bash
+uv run uvicorn backend.api:app --host 127.0.0.1 --port 8000 --reload
+```
+
+- `GET /health`：健康检查。
+- `POST /research`：提交 `{ "topic": "研究主题" }`，以 SSE 方式返回 Agent 进度。
 
 ## 目录结构
 
