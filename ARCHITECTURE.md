@@ -113,7 +113,7 @@ async def achat(messages, *, node: str, trace_id: str, json_mode: bool = False) 
 
 #### `core/costs.py`
 
-维护模型价格表（单位：元 / 百万 token，输入与输出分别计价），提供 `estimate(model, prompt_tokens, completion_tokens) -> float`。
+从集中配置读取模型价格表（单位：元 / 百万 token，区分输入缓存命中、输入缓存未命中与输出），提供 `estimate(model, prompt_tokens, completion_tokens, *, cache_hit_tokens=0, cache_miss_tokens=None) -> float`。未提供缓存明细时按缓存未命中保守估算。
 
 > 价格表从配置文件读取而非硬编码，因为模型定价会变；实际数值需在实现时从服务商官方定价页核对填入。
 

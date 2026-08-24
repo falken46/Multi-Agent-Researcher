@@ -4,17 +4,17 @@
 
 ## 当前实现阶段
 
-当前处于 Phase 9：端到端验收测试（Docker 阶段暂缓）。
+v1 的 Phase 0—9 已完成；v2 的 **Phase 10 基础设施层已完成，当前等待验收**。下一阶段为 Phase 11 RAG 检索层，尚未开始。
 
-已确认的实现边界：
+Phase 10 已完成：
 
 - 使用 LangGraph `StateGraph` 编排 Agent。
-- `Planner` / `Researcher` / `Writer` 后续分别放在独立文件中。
-- system prompt 后续统一放在 `prompts/*.md`。
+- `Planner` / `Researcher` / `Writer` 分别位于独立文件，system prompt 统一位于 `prompts/*.md`。
 - `tools/` 只放外部 IO 工具，例如 `web_search` 和 `web_fetch`。
-- PRD 中提到的 `markdown_writer` 不作为独立工具实现，Markdown 报告生成由 `agents/writer.py` 中的 Writer Agent 负责。
-- LLM 接口使用 DeepSeek API 的 OpenAI 兼容格式。
-- Docker 暂不实施，后续按需进入容器化阶段。
+- `core/config.py` 集中管理配置，业务代码不再直接读取环境变量。
+- `core/llm.py` 是唯一 LLM 调用入口，统一处理超时、重试、token、成本与 trace。
+- `core/trace.py` 将任务事件写入 `traces/{date}/{trace_id}.jsonl` 并支持汇总。
+- 当前共 61 条离线测试通过，其中保留 v1 原有 41 条回归测试。
 
 ## 环境配置
 
@@ -41,7 +41,7 @@ pip install -r requirements.txt
 
 ## 环境变量
 
-复制 `.env.example` 为 `.env`，并填入实际 Key：
+复制 `.env.example` 为 `.env`，并填入实际 Key。完整配置及默认值以 `.env.example` 为准，最小联网运行配置如下：
 
 ```bash
 DEEPSEEK_API_KEY=sk-xxx
@@ -80,6 +80,7 @@ BACKEND_URL=http://127.0.0.1:8001
 ```text
 agents/      LangGraph 状态、图结构与三个 Agent
 backend/     FastAPI API 与 SSE 流式推送
+core/        集中配置、LLM 入口、成本换算与 JSONL trace
 frontend/    Streamlit 前端
 prompts/     Agent system prompt
 tests/       pytest 测试

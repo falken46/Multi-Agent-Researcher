@@ -71,17 +71,14 @@
 
 ## 3. 成本模型
 
-`core/costs.py` 维护价格表：
+`core/config.py` 维护价格表，`core/costs.py` 只负责换算。当前默认值于 2026-08-24 从 [DeepSeek 官方模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing) 核对，单位为人民币 / 百万 token：
 
-```python
-# 单位：元 / 百万 token
-PRICING = {
-    "deepseek-v4-flash": {"input": 0.0, "output": 0.0},   # 实现时按官方定价页填入
-}
+| 模型 | 输入（缓存命中） | 输入（缓存未命中） | 输出 |
+|------|------------------:|--------------------:|-----:|
+| `deepseek-v4-flash` | 0.02 | 1.00 | 2.00 |
+| `deepseek-v4-pro` | 0.025 | 3.00 | 6.00 |
 
-def estimate(model: str, prompt_tokens: int, completion_tokens: int) -> float:
-    ...
-```
+价格通过 `MODEL_PRICING` 覆盖，版本日期通过 `MODEL_PRICING_VERSION` 记录；API 未返回缓存明细时，输入 token 按缓存未命中保守估算。
 
 **约定**：
 

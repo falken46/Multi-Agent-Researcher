@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Literal, TypedDict
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +57,7 @@ def web_search(
 
 
 def _resolve_provider(provider: SearchProvider | None) -> SearchProvider:
-    raw_provider = provider or os.getenv("SEARCH_PROVIDER", "tavily")
+    raw_provider = provider or get_settings().search_provider
     normalized_provider = raw_provider.strip().lower()
     if normalized_provider in {"tavily", "duckduckgo"}:
         return normalized_provider  # type: ignore[return-value]
@@ -71,9 +68,10 @@ def _resolve_provider(provider: SearchProvider | None) -> SearchProvider:
 
 
 def _search_tavily(query: str, max_results: int) -> list[SearchResult]:
-    api_key = os.getenv("TAVILY_API_KEY", "").strip()
-    if not api_key:
-        raise WebSearchError("TAVILY_API_KEY is not configured")
+    try:
+        api_key = get_settings().require_tavily_api_key()
+    except ValueError as exc:
+        raise WebSearchError(str(exc)) from exc
 
     try:
         from tavily import TavilyClient

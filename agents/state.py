@@ -14,3 +14,4 @@ class ResearchState(TypedDict):
     final_report: str
     errors: list[str]
     retry_count: int
+    trace_id: str

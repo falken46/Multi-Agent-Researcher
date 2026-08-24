@@ -9,6 +9,7 @@ from typing import Any
 
 from agents.graph import create_initial_state, graph
 from agents.state import ResearchState
+from core.trace import emit, summarize
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +21,16 @@ def stream_research_progress(
     """运行 LangGraph,按节点状态变更输出 SSE 事件。"""
     normalized_topic = topic.strip()
     current_state: ResearchState = create_initial_state(normalized_topic)
+    trace_id = current_state["trace_id"]
 
     logger.info("research stream start topic=%r", normalized_topic[:100])
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "task_start",
+            "payload": {"topic": normalized_topic},
+        }
+    )
     yield _sse_event(
         event="start",
         payload={
@@ -54,17 +63,41 @@ def stream_research_progress(
                     },
                 )
 
+        final_status = _final_status(current_state)
+        emit(
+            {
+                "trace_id": trace_id,
+                "event": "task_end",
+                "payload": {"status": final_status},
+            }
+        )
         yield _sse_event(
             event="complete",
             payload={
                 "node": "end",
-                "status": _final_status(current_state),
+                "status": final_status,
                 "state": _state_summary(current_state),
+                "trace": summarize(trace_id),
             },
         )
         logger.info("research stream complete topic=%r", normalized_topic[:100])
     except Exception as exc:
         logger.error("research stream failed: %s", exc)
+        emit(
+            {
+                "trace_id": trace_id,
+                "event": "error",
+                "node": "backend",
+                "payload": {"type": type(exc).__name__, "message": str(exc)},
+            }
+        )
+        emit(
+            {
+                "trace_id": trace_id,
+                "event": "task_end",
+                "payload": {"status": "failed"},
+            }
+        )
         yield _sse_event(
             event="error",
             payload={
@@ -91,6 +124,7 @@ def _state_summary(state: ResearchState) -> dict[str, Any]:
         "final_report": state.get("final_report", ""),
         "errors": state.get("errors", []),
         "retry_count": state.get("retry_count", 0),
+        "trace_id": state.get("trace_id", ""),
     }
 
 

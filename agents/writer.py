@@ -3,21 +3,14 @@
 from __future__ import annotations
 
 import logging
-import os
-
-from dotenv import load_dotenv
-from openai import OpenAI
+import time
 
 from agents.prompt_loader import load_prompt
 from agents.state import ResearchState
-
-load_dotenv()
+from core.llm import LLMError, chat
+from core.trace import emit, new_trace_id
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_BASE_URL = "https://api.deepseek.com"
-
 
 class WriterError(RuntimeError):
     """Writer Agent 写作失败时抛出。"""
@@ -29,12 +22,25 @@ def writer_node(state: ResearchState) -> dict[str, object]:
     sub_questions = state.get("sub_questions", [])
     research_results = state.get("research_results", {})
     errors = list(state.get("errors", []))
+    trace_id = state.get("trace_id", "") or new_trace_id()
+    started_at = time.perf_counter()
     logger.info(
         "writer_node enter topic=%r sub_questions=%s results=%s errors=%s",
         topic[:100],
         len(sub_questions),
         len(research_results),
         len(errors),
+    )
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "node_start",
+            "node": "writer",
+            "payload": {
+                "sub_question_count": len(sub_questions),
+                "research_result_count": len(research_results),
+            },
+        }
     )
 
     try:
@@ -55,12 +61,26 @@ def writer_node(state: ResearchState) -> dict[str, object]:
         final_report = _call_writer_model(
             user_prompt=user_prompt,
             system_prompt=system_prompt,
+            trace_id=trace_id,
         )
         logger.info("writer_node output final_report_chars=%s", len(final_report))
+        emit(
+            {
+                "trace_id": trace_id,
+                "event": "node_end",
+                "node": "writer",
+                "payload": {
+                    "status": "completed",
+                    "final_report_chars": len(final_report),
+                    "latency_ms": (time.perf_counter() - started_at) * 1000,
+                },
+            }
+        )
         return {"final_report": final_report}
     except Exception as exc:
         logger.error("writer_node failed: %s", exc)
         errors.append(f"Writer: {exc}")
+        _emit_node_error(trace_id, exc, started_at)
         return {"errors": errors}
 
 
@@ -101,34 +121,40 @@ def build_writer_prompt(
     )
 
 
-def _call_writer_model(user_prompt: str, system_prompt: str) -> str:
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        raise WriterError("DEEPSEEK_API_KEY is not configured")
-    _validate_ascii_env_value("DEEPSEEK_API_KEY", api_key)
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url=os.getenv("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL).strip(),
-    )
-    response = client.chat.completions.create(
-        model=os.getenv("MODEL_NAME", DEFAULT_MODEL).strip() or DEFAULT_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-    content = response.choices[0].message.content or ""
-    if not content.strip():
-        raise WriterError("writer model returned empty content")
-    return content.strip()
-
-
-def _validate_ascii_env_value(name: str, value: str) -> None:
+def _call_writer_model(user_prompt: str, system_prompt: str, trace_id: str) -> str:
     try:
-        value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise WriterError(f"{name} must contain ASCII characters only") from exc
+        return chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            node="writer",
+            trace_id=trace_id,
+        ).content
+    except LLMError as exc:
+        raise WriterError(str(exc)) from exc
+
+
+def _emit_node_error(trace_id: str, exc: Exception, started_at: float) -> None:
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "error",
+            "node": "writer",
+            "payload": {"type": type(exc).__name__, "message": str(exc)},
+        }
+    )
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "node_end",
+            "node": "writer",
+            "payload": {
+                "status": "failed",
+                "latency_ms": (time.perf_counter() - started_at) * 1000,
+            },
+        }
+    )
 
 
 __all__ = ["build_writer_prompt", "writer_node"]

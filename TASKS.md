@@ -9,7 +9,7 @@
 
 | Phase | 内容 | 里程碑 | 状态 |
 |-------|------|--------|------|
-| 10 | 基础设施层（config / llm / trace / costs） | M1 | ⬜ |
+| 10 | 基础设施层（config / llm / trace / costs） | M1 | 🟨 待验收 |
 | 11 | RAG 检索层 | M1 | ⬜ |
 | 12 | Agent 编排升级（Critic / 并行 / Checkpoint） | M1 | ⬜ |
 | 13 | 评测体系 | M2 | ⬜ |
@@ -29,13 +29,13 @@
 
 > 目标：把散落的配置、LLM 调用与日志收敛成三个可复用模块，为后续所有 Phase 提供地基。
 
-- [ ] T10.1 `core/config.py`：pydantic-settings 定义全部配置项，带默认值与类型校验
-- [ ] T10.2 `core/costs.py`：模型价格表（从配置读取）+ `estimate()` 换算函数
-- [ ] T10.3 `core/trace.py`：`new_trace_id()` / `emit(event)` / `summarize(trace_id)`，JSONL 落盘
-- [ ] T10.4 `core/llm.py`：统一 `chat()` / `achat()`，含超时、指数退避重试、token 计量、自动写 trace
-- [ ] T10.5 改造 `agents/planner.py`、`agents/researcher.py`、`agents/writer.py` 改用 `core.llm`
-- [ ] T10.6 更新 `.env.example`
-- [ ] T10.7 `tests/test_core_llm.py`、`tests/test_core_trace.py`
+- [x] T10.1 `core/config.py`：pydantic-settings 定义全部配置项，带默认值与类型校验
+- [x] T10.2 `core/costs.py`：模型价格表（从配置读取）+ `estimate()` 换算函数
+- [x] T10.3 `core/trace.py`：`new_trace_id()` / `emit(event)` / `summarize(trace_id)`，JSONL 落盘
+- [x] T10.4 `core/llm.py`：统一 `chat()` / `achat()`，含超时、指数退避重试、token 计量、自动写 trace
+- [x] T10.5 改造 `agents/planner.py`、`agents/researcher.py`、`agents/writer.py` 改用 `core.llm`
+- [x] T10.6 更新 `.env.example`
+- [x] T10.7 `tests/test_core_llm.py`、`tests/test_core_trace.py`
 
 **验收标准**
 

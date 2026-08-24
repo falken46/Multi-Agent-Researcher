@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections.abc import Iterable, Iterator
 from typing import Any, TypedDict
 
 import requests
 import streamlit as st
+
+from core.config import get_settings
 
 DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT = (5.0, 600.0)
@@ -167,7 +168,7 @@ def main() -> None:
     with st.sidebar:
         api_base_url = st.text_input(
             "后端地址",
-            value=os.getenv("BACKEND_URL", DEFAULT_API_BASE_URL),
+            value=get_settings().backend_url or DEFAULT_API_BASE_URL,
         )
 
     with st.form("research_form", clear_on_submit=False):

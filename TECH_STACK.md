@@ -82,6 +82,9 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com
 MODEL_NAME=deepseek-v4-flash
 LLM_TIMEOUT=60
 LLM_MAX_RETRY=3
+MODEL_PRICING={"deepseek-v4-flash":{"input_cache_hit":0.02,"input_cache_miss":1.0,"output":2.0},"deepseek-v4-pro":{"input_cache_hit":0.025,"input_cache_miss":3.0,"output":6.0}}
+MODEL_PRICING_CURRENCY=CNY
+MODEL_PRICING_VERSION=2026-08-24
 
 # ---- 联网搜索 ----
 SEARCH_PROVIDER=tavily
@@ -110,9 +113,14 @@ CHECKPOINT_DB=data/checkpoints.sqlite
 # ---- 可观测 ----
 TRACE_DIR=traces
 TRACE_ENABLED=true
+
+# ---- 前端 ----
+BACKEND_URL=http://127.0.0.1:8000
 ```
 
 > `.env.example` 需与本节保持同步。新增配置项必须同时更新三处：`core/config.py`、`.env.example`、本文档。
+
+模型价格默认值按 2026-08-24 的 [DeepSeek 官方模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing) 配置，单位为人民币 / 百万 token；输入成本分别记录缓存命中与未命中。价格变化时必须同时更新 `MODEL_PRICING` 和 `MODEL_PRICING_VERSION`。
 
 ---
 

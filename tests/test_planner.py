@@ -24,9 +24,10 @@ def make_state(topic: str = "AI Agent 趋势") -> ResearchState:
 def test_planner_outputs_sub_questions_from_json_object(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_call(topic: str, system_prompt: str) -> str:
+    def fake_call(topic: str, system_prompt: str, trace_id: str) -> str:
         assert topic == "AI Agent 趋势"
         assert "Planner Agent" in system_prompt
+        assert trace_id
         return """
         {
           "sub_questions": [
@@ -49,7 +50,7 @@ def test_planner_outputs_sub_questions_from_json_object(
 
 
 def test_planner_accepts_json_array_response(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_call(topic: str, system_prompt: str) -> str:
+    def fake_call(topic: str, system_prompt: str, trace_id: str) -> str:
         return '["Q1", "Q2", "Q3"]'
 
     monkeypatch.setattr(planner_module, "_call_planner_model", fake_call)
@@ -60,7 +61,7 @@ def test_planner_accepts_json_array_response(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_planner_writes_errors_for_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_call(topic: str, system_prompt: str) -> str:
+    def fake_call(topic: str, system_prompt: str, trace_id: str) -> str:
         return "not json"
 
     monkeypatch.setattr(planner_module, "_call_planner_model", fake_call)
@@ -83,4 +84,4 @@ def test_planner_rejects_non_ascii_api_key(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-测试")
 
     with pytest.raises(planner_module.PlannerError, match="ASCII"):
-        planner_module._call_planner_model("测试主题", "system prompt")
+        planner_module._call_planner_model("测试主题", "system prompt", "trace-test")

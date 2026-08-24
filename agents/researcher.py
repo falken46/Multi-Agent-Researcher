@@ -3,21 +3,16 @@
 from __future__ import annotations
 
 import logging
-import os
-
-from dotenv import load_dotenv
-from openai import OpenAI
+import time
 
 from agents.prompt_loader import load_prompt
 from agents.state import ResearchState
+from core.llm import LLMError, chat
+from core.trace import emit, new_trace_id
 from tools.web_search import SearchResult, web_search
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_BASE_URL = "https://api.deepseek.com"
 MAX_SEARCH_RESULTS = 3
 
 
@@ -28,37 +23,88 @@ class ResearcherError(RuntimeError):
 def researcher_node(state: ResearchState) -> dict[str, object]:
     """遍历研究子问题,返回每个子问题对应的资料摘要。"""
     sub_questions = state.get("sub_questions", [])
+    trace_id = state.get("trace_id", "") or new_trace_id()
+    started_at = time.perf_counter()
     logger.info("researcher_node enter sub_questions=%s", len(sub_questions))
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "node_start",
+            "node": "researcher",
+            "payload": {"sub_question_count": len(sub_questions)},
+        }
+    )
 
     research_results: dict[str, str] = dict(state.get("research_results", {}))
     errors = list(state.get("errors", []))
 
     if not sub_questions:
-        errors.append("Researcher: sub_questions must not be empty")
+        exc = ResearcherError("sub_questions must not be empty")
+        errors.append(f"Researcher: {exc}")
+        _emit_node_error(trace_id, exc, started_at)
         return {"errors": errors}
 
-    system_prompt = load_prompt("researcher_system")
+    try:
+        system_prompt = load_prompt("researcher_system")
+    except Exception as exc:
+        logger.error("researcher_node failed: %s", exc)
+        errors.append(f"Researcher: {exc}")
+        _emit_node_error(trace_id, exc, started_at)
+        return {"errors": errors}
+
     for question in sub_questions:
         try:
-            summary = _research_question(question=question, system_prompt=system_prompt)
+            summary = _research_question(
+                question=question,
+                system_prompt=system_prompt,
+                trace_id=trace_id,
+            )
             research_results[question] = summary
             logger.info("researcher_node question done chars=%s", len(summary))
         except Exception as exc:
             logger.error("researcher_node question failed: %s", exc)
             errors.append(f"Researcher: {question} | {exc}")
+            emit(
+                {
+                    "trace_id": trace_id,
+                    "event": "error",
+                    "node": "researcher",
+                    "payload": {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "question": question[:200],
+                    },
+                }
+            )
 
     logger.info(
         "researcher_node output research_results=%s errors=%s",
         len(research_results),
         len(errors),
     )
-    result: dict[str, object] = {"research_results": research_results, "errors": errors}
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "node_end",
+            "node": "researcher",
+            "payload": {
+                "status": "completed" if research_results else "failed",
+                "research_result_count": len(research_results),
+                "error_count": len(errors),
+                "latency_ms": (time.perf_counter() - started_at) * 1000,
+            },
+        }
+    )
+    result: dict[str, object] = {
+        "research_results": research_results,
+        "errors": errors,
+    }
     if sub_questions and not research_results:
         result["retry_count"] = state.get("retry_count", 0) + 1
     return result
 
 
-def _research_question(question: str, system_prompt: str) -> str:
+def _research_question(question: str, system_prompt: str, trace_id: str) -> str:
     normalized_question = question.strip()
     if not normalized_question:
         raise ResearcherError("question must not be empty")
@@ -68,6 +114,7 @@ def _research_question(question: str, system_prompt: str) -> str:
         question=normalized_question,
         search_results=search_results,
         system_prompt=system_prompt,
+        trace_id=trace_id,
     )
     return _append_sources(summary=summary, search_results=search_results)
 
@@ -76,27 +123,22 @@ def _call_summary_model(
     question: str,
     search_results: list[SearchResult],
     system_prompt: str,
+    trace_id: str,
 ) -> str:
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        raise ResearcherError("DEEPSEEK_API_KEY is not configured")
-    _validate_ascii_env_value("DEEPSEEK_API_KEY", api_key)
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url=os.getenv("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL).strip(),
-    )
-    response = client.chat.completions.create(
-        model=os.getenv("MODEL_NAME", DEFAULT_MODEL).strip() or DEFAULT_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": _build_summary_prompt(question, search_results)},
-        ],
-    )
-    content = response.choices[0].message.content or ""
-    if not content.strip():
-        raise ResearcherError("summary model returned empty content")
-    return content.strip()
+    try:
+        return chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": _build_summary_prompt(question, search_results),
+                },
+            ],
+            node="researcher",
+            trace_id=trace_id,
+        ).content
+    except LLMError as exc:
+        raise ResearcherError(str(exc)) from exc
 
 
 def _build_summary_prompt(question: str, search_results: list[SearchResult]) -> str:
@@ -138,11 +180,26 @@ def _append_sources(summary: str, search_results: list[SearchResult]) -> str:
     return f"{summary}\n\n来源:\n{source_lines}"
 
 
-def _validate_ascii_env_value(name: str, value: str) -> None:
-    try:
-        value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise ResearcherError(f"{name} must contain ASCII characters only") from exc
+def _emit_node_error(trace_id: str, exc: Exception, started_at: float) -> None:
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "error",
+            "node": "researcher",
+            "payload": {"type": type(exc).__name__, "message": str(exc)},
+        }
+    )
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "node_end",
+            "node": "researcher",
+            "payload": {
+                "status": "failed",
+                "latency_ms": (time.perf_counter() - started_at) * 1000,
+            },
+        }
+    )
 
 
 __all__ = ["researcher_node"]
