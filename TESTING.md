@@ -49,7 +49,7 @@ def test_planner_outputs_json_list(mocker):
 # tests/test_graph.py
 def test_full_graph_happy_path(mocker):
     # mock 三个节点的 LLM 调用
-    ...
+    ... 
     
     initial_state = {"topic": "测试主题", ...}
     final_state = graph.invoke(initial_state)

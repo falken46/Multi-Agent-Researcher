@@ -4,7 +4,7 @@
 
 ## 当前实现阶段
 
-当前处于 Phase 6：FastAPI 后端。
+当前处于 Phase 9：端到端验收测试（Docker 阶段暂缓）。
 
 已确认的实现边界：
 
@@ -62,6 +62,18 @@ uv run uvicorn backend.api:app --host 127.0.0.1 --port 8000 --reload
 
 - `GET /health`：健康检查。
 - `POST /research`：提交 `{ "topic": "研究主题" }`，以 SSE 方式返回 Agent 进度。
+
+## 前端启动
+
+```bash
+uv run streamlit run frontend/app.py --server.address 127.0.0.1 --server.port 8501
+```
+
+默认前端连接 `http://127.0.0.1:8000`。如果后端端口不同, 可在环境变量中设置：
+
+```bash
+BACKEND_URL=http://127.0.0.1:8001
+```
 
 ## 目录结构
 

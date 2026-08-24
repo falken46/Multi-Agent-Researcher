@@ -34,6 +34,7 @@ def stream_research_progress(
     try:
         for update in compiled_graph.stream(current_state, stream_mode="updates"):
             for node_name, node_update in update.items():
+                previous_errors = list(current_state.get("errors", []))
                 if isinstance(node_update, dict):
                     current_state.update(node_update)
 
@@ -42,7 +43,12 @@ def stream_research_progress(
                     event="progress",
                     payload={
                         "node": node_name,
-                        "status": "completed",
+                        "status": _node_status(
+                            node_name=node_name,
+                            node_update=node_update,
+                            previous_errors=previous_errors,
+                            state=current_state,
+                        ),
                         "state": _state_summary(current_state),
                         "update": _safe_json_value(node_update),
                     },
@@ -52,7 +58,7 @@ def stream_research_progress(
             event="complete",
             payload={
                 "node": "end",
-                "status": "completed",
+                "status": _final_status(current_state),
                 "state": _state_summary(current_state),
             },
         )
@@ -86,6 +92,36 @@ def _state_summary(state: ResearchState) -> dict[str, Any]:
         "errors": state.get("errors", []),
         "retry_count": state.get("retry_count", 0),
     }
+
+
+def _node_status(
+    node_name: str,
+    node_update: Any,
+    previous_errors: list[str],
+    state: ResearchState,
+) -> str:
+    if _has_new_errors(node_update=node_update, previous_errors=previous_errors):
+        if node_name == "researcher" and state.get("research_results"):
+            return "warning"
+        return "failed"
+    return "completed"
+
+
+def _final_status(state: ResearchState) -> str:
+    if state.get("final_report"):
+        return "completed"
+    if state.get("errors"):
+        return "failed"
+    return "empty"
+
+
+def _has_new_errors(node_update: Any, previous_errors: list[str]) -> bool:
+    if not isinstance(node_update, dict):
+        return False
+    updated_errors = node_update.get("errors")
+    if not isinstance(updated_errors, list):
+        return False
+    return len(updated_errors) > len(previous_errors)
 
 
 def _safe_json_value(value: Any) -> Any:

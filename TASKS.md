@@ -91,12 +91,12 @@
 
 ## Phase 7: Streamlit 前端（预计 1 天）
 
-- [ ] T7.1 实现 `frontend/app.py`：基础布局
-- [ ] T7.2 实现主题输入与启动按钮
-- [ ] T7.3 实现 SSE 客户端订阅与进度展示
-- [ ] T7.4 实现 Agent 状态分块展示（Planner / Researcher / Writer）
-- [ ] T7.5 实现最终 Markdown 渲染与下载按钮
-- [ ] T7.6 手动测试：浏览器端走完完整流程
+- [x] T7.1 实现 `frontend/app.py`：基础布局
+- [x] T7.2 实现主题输入与启动按钮
+- [x] T7.3 实现 SSE 客户端订阅与进度展示
+- [x] T7.4 实现 Agent 状态分块展示（Planner / Researcher / Writer）
+- [x] T7.5 实现最终 Markdown 渲染与下载按钮
+- [x] T7.6 手动测试：浏览器端走完完整流程
 
 **验收标准**：前端能稳定展示完整研究流程并下载报告
 
@@ -116,7 +116,7 @@
 
 ## Phase 9: 端到端验收测试（预计 0.5 天）
 
-- [ ] T9.1 编写 `tests/test_e2e.py`：mock 模式下的完整流程测试
+- [x] T9.1 编写 `tests/test_e2e.py`：mock 模式下的完整流程测试
 - [ ] T9.2 运行 5 个真实主题（参考 TESTING.md）
 - [ ] T9.3 撰写验收报告 `tests/acceptance_report.md`
 - [ ] T9.4 录制一次完整 Demo 演示（截图或 GIF）
