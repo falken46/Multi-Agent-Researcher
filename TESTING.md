@@ -1,194 +1,151 @@
-# Multi-Agent 研究助手 - 测试与验收标准
+# DeepResearch Agent - 测试与验收标准 (v2)
+
+> v1 已有 41 条测试，全部保留并作为**回归红线**。v2 新增模块须达到同等覆盖标准。
+
+---
 
 ## 1. 测试分层
 
-### 1.1 单元测试（pytest）
-位于 `tests/test_*.py`，覆盖每个 Agent 与工具。
+| 层级 | 位置 | 是否需要网络 | 在 CI 中运行 |
+|------|------|--------------|--------------|
+| 单元测试 | `tests/test_*.py` | 否 | ✓ |
+| 集成测试 | `tests/test_graph*.py` | 否（mock LLM） | ✓ |
+| 端到端测试 | `tests/test_e2e.py` | mock 模式否 | ✓ |
+| 真实调用测试 | 标记 `@pytest.mark.live` | 是 | ✗（本地手动跑） |
 
-### 1.2 集成测试
-`tests/test_graph.py` 测试完整 LangGraph 流程（mock LLM）。
-
-### 1.3 端到端测试
-真实调用 LLM + Web Search，跑 5 个验收主题。
-
-## 2. 单元测试要求
-
-### 2.1 工具测试
+**核心原则**：CI 中运行的测试**不得依赖任何 API Key 或外网**。需要真实调用的测试一律打 `live` 标记并默认跳过。
 
 ```python
-# tests/test_tools.py
-def test_web_search_returns_results():
-    results = web_search("LangGraph tutorial", max_results=3)
-    assert len(results) > 0
-    assert all("url" in r for r in results)
-
-def test_web_fetch_extracts_text():
-    text = web_fetch("https://example.com")
-    assert isinstance(text, str)
-    assert len(text) > 0
+# pyproject.toml
+[tool.pytest.ini_options]
+markers = ["live: 需要真实 API Key 与网络，CI 中跳过"]
+addopts = "-m 'not live'"
 ```
 
-### 2.2 Agent 测试（Mock LLM）
+---
+
+## 2. v2 新增模块的测试要求
+
+### 2.1 基础设施层 `core/`
+
+| 模块 | 测试要点 |
+|------|----------|
+| `config.py` | 缺失必填项时报错清晰；默认值正确；类型转换正确 |
+| `costs.py` | 已知 token 数换算结果正确；未知模型不崩溃（返回 0 并告警） |
+| `trace.py` | 事件写入后可读回；`summarize()` 聚合正确；并发写不丢事件 |
+| `llm.py` | 重试逻辑：超时重试、4xx 不重试；token 从 usage 正确提取；调用后 trace 有记录 |
+
+`llm.py` 的重试测试必须 mock 掉真实 sleep，避免测试变慢：
 
 ```python
-# tests/test_planner.py
-def test_planner_outputs_json_list(mocker):
-    mock_response = create_mock_response('["Q1", "Q2", "Q3"]')
-    mocker.patch("agents.planner.client.messages.create", return_value=mock_response)
-    
-    state = {"topic": "AI 趋势", "sub_questions": [], ...}
-    result = planner_node(state)
-    
-    assert len(result["sub_questions"]) == 3
-    assert all(isinstance(q, str) for q in result["sub_questions"])
-```
-
-### 2.3 状态机测试
-
-```python
-# tests/test_graph.py
-def test_full_graph_happy_path(mocker):
-    # mock 三个节点的 LLM 调用
+def test_retry_on_timeout_not_on_4xx(mocker):
+    mocker.patch("time.sleep")          # 不真的等待
     ...
-    
-    initial_state = {"topic": "测试主题", ...}
-    final_state = graph.invoke(initial_state)
-    
-    assert final_state["sub_questions"]
-    assert final_state["research_results"]
-    assert final_state["final_report"]
 ```
 
-## 3. 端到端验收主题集
+### 2.2 检索层 `rag/`
 
-以下 5 个主题用于真实 LLM + Web Search 验收：
+> **关键约定**：所有检索层测试使用 `EMBEDDING_BACKEND=fake`。
+> `fake` 后端根据文本内容生成确定性哈希向量，保证测试可复现、零网络依赖、毫秒级完成。
 
-### 主题 1：技术趋势类
-**输入**：`2025 年 AI Agent 领域的主要技术趋势`
+| 模块 | 测试要点 |
+|------|----------|
+| `splitter.py` | 中文长文本按标点切分正确；overlap 生效；元数据（doc_id / chunk_index）正确携带；空文档不崩溃 |
+| `embeddings.py` | 三种后端接口一致；`fake` 后端对相同输入返回相同向量 |
+| `vectorstore.py` | add 后 count 正确；query 返回条数符合 top_k；元数据可回取 |
+| `bm25.py` | 中文分词后能命中关键词；未命中返回空而非报错 |
+| `hybrid.py` | **RRF 计算结果与手算一致**（构造两路已知排名，断言融合后顺序） |
+| `rerank.py` | 重排后条数等于 top_n；`none` 后端等价于直通 |
+| `pipeline.py` | 建库 → 检索链路贯通；单通道失效时可降级 |
 
-**预期产出**：
-- 3-5 个子问题（覆盖架构、应用、挑战等维度）
-- 每个子问题有真实 Web 来源
-- 报告含摘要 + 各小节 + 参考来源
+`hybrid.py` 是纯函数，最容易写出高价值测试，必须覆盖：
 
-**通过标准**：报告结构完整，无明显事实错误。
-
----
-
-### 主题 2：工具对比类
-**输入**：`LangGraph vs LangChain：核心差异与适用场景`
-
-**预期产出**：
-- 子问题应包含两者的设计哲学、API 差异、迁移路径
-- 报告应有对比表格（Markdown table）
-
-**通过标准**：能产出对比表格且信息准确。
-
----
-
-### 主题 3：人物/公司研究
-**输入**：`Anthropic 公司 2025 年的产品矩阵`
-
-**预期产出**：
-- 涵盖 Claude 模型、API、Claude Code 等产品
-- 每个产品有简短介绍
-
-**通过标准**：至少覆盖 3 个真实产品线。
-
----
-
-### 主题 4：行业分析
-**输入**：`大模型推理优化的最新方法`
-
-**预期产出**：
-- 涉及 KV Cache、Speculative Decoding、量化等方向
-- 含具体技术名词与简介
-
-**通过标准**：至少识别 3 个有效优化方向。
-
----
-
-### 主题 5：流程类
-**输入**：`如何从 0 开始学习 Multi-Agent 系统开发`
-
-**预期产出**：
-- 子问题应包含基础知识、框架选择、实战路径
-- 报告应有阶段性学习路线
-
-**通过标准**：能输出结构化学习路径。
-
----
-
-## 4. 验收报告模板
-
-完成 5 个主题测试后，在 `tests/acceptance_report.md` 中按以下格式记录：
-
-```markdown
-# 验收报告
-
-测试日期：YYYY-MM-DD
-模型：deepseek-v4-pro / deepseek-v4-flash
-搜索引擎：Tavily
-
-## 主题结果
-
-| 主题编号 | 主题 | 子问题数 | 检索成功率 | 报告质量 | 总评 |
-|---------|------|---------|-----------|---------|------|
-| 1 | AI Agent 趋势 | 5 | 5/5 | ✅ 优 | Pass |
-| 2 | LangGraph vs LangChain | 4 | 4/4 | ✅ 良 | Pass |
-| 3 | Anthropic 产品矩阵 | 5 | 4/5 | ⚠️ 中 | Partial |
-| 4 | 推理优化 | 5 | 5/5 | ✅ 优 | Pass |
-| 5 | Multi-Agent 学习 | 4 | 4/4 | ✅ 良 | Pass |
-
-## 通过率：4/5（80%）
-
-## 各 Agent 表现
-
-### Planner
-- ✅ JSON 格式输出稳定
-- ⚠️ 主题 3 拆解粒度偏粗，建议优化 Prompt
-
-### Researcher
-- ✅ 检索资料相关性高
-- ⚠️ 偶发 Tavily API 超时，已通过重试机制处理
-
-### Writer
-- ✅ Markdown 结构完整
-- ⚠️ 主题 3 报告内容偏短，可能受 Researcher 输出限制
-
-## LangGraph 状态机表现
-- 重试机制触发：2 次（主题 3、主题 4）
-- 全部成功完成最终报告
-
-## 工程层面
-- Docker 启动：✅ 一次成功
-- SSE 流式推送：✅ 前端能实时看到进度
-- 平均任务耗时：约 90 秒
+```python
+def test_rrf_prefers_doc_ranked_high_in_both_channels():
+    vector_ranks = ["d1", "d2", "d3"]
+    bm25_ranks   = ["d3", "d1", "d4"]
+    fused = rrf_fuse({"vector": vector_ranks, "bm25": bm25_ranks}, k=60)
+    assert fused[0] == "d1"      # 两路都靠前
 ```
 
-## 5. 性能基准（参考）
+### 2.3 编排层 `agents/`
 
-| 指标 | 目标值 |
-|------|--------|
-| 单次完整研究任务 | < 3 分钟 |
-| Planner 单步耗时 | < 10 秒 |
-| Researcher 单子问题 | < 30 秒 |
-| Writer 报告生成 | < 60 秒 |
-| 后端启动时间 | < 5 秒 |
-| Docker 镜像大小 | < 500 MB |
+| 模块 | 测试要点 |
+|------|----------|
+| `critic.py` | JSON 解析成功路径；解析失败时降级为中性分数且不抛出；分数越界被裁剪到 [0,1] |
+| `researcher.py` | 并发上限生效；单个子问题异常不影响其他；`missing_aspects` 非空时只查缺口；降级触发条件正确 |
+| `graph.py` | `should_revise` 三条分支各一测试；**回退次数不超过 MAX_REVISION**；分数无提升时提前退出 |
 
-## 6. Demo 录制建议
+其中"回退上限"是防御性测试，必须显式验证：
 
-最终验收时录制一段 1-2 分钟 Demo，建议内容：
+```python
+def test_revision_never_exceeds_hard_limit(mocker):
+    # Critic 永远返回 0.1（永不达标）
+    mocker.patch("agents.critic.critic_node", return_value={"quality_score": 0.1, ...})
+    result = build_graph().invoke(create_initial_state("任意主题"))
+    assert result["revision_count"] <= config.MAX_REVISION
+```
 
-1. 启动服务（`docker-compose up`）
-2. 打开 Streamlit 前端
-3. 输入主题（建议用主题 2"LangGraph vs LangChain"）
-4. 展示 3 个 Agent 实时进度
-5. 展示最终 Markdown 报告
-6. 点击下载按钮
+### 2.4 接口层
 
-录制工具推荐：
-- macOS：QuickTime / Kap
-- Windows：ScreenToGif / OBS
-- 跨平台：LICEcap（GIF 输出）
+| 模块 | 测试要点 |
+|------|----------|
+| `backend/api.py` | 新增 SSE 事件类型能正确推送；异常时返回结构化错误 |
+| `mcp/server.py` | 工具注册成功；参数 schema 正确；调用返回结构符合约定 |
+
+---
+
+## 3. 异步测试约定
+
+v2 大量使用 `asyncio`，统一使用 `pytest-asyncio`：
+
+```python
+@pytest.mark.asyncio
+async def test_researcher_runs_concurrently(mocker):
+    ...
+```
+
+并发行为的验证方式：mock 单次检索为固定延时，断言**总耗时明显小于串行耗时之和**，而不是断言具体线程调度顺序（后者不稳定）。
+
+---
+
+## 4. 端到端验收主题
+
+真实调用（`@pytest.mark.live`，本地手动执行），覆盖三类场景：
+
+| # | 主题 | 期望验证点 |
+|---|------|-----------|
+| 1 | 语料内明确存在的技术问题 | 全程走 kb_search，不触发降级 |
+| 2 | 语料完全不涉及的时事问题 | 正确触发降级到 web_search |
+| 3 | 一半在语料内的混合问题 | 两个通道都被使用，报告来源含两种 origin |
+| 4 | 语料内但表述模糊的问题 | 观察重排是否把正确切片提前 |
+| 5 | 刻意宽泛的主题 | 观察 Critic 是否触发返工 |
+
+**验收标准**：5 个主题中至少 4 个产出结构完整、引用可溯源的报告。
+
+---
+
+## 5. 回归红线
+
+每个 Phase 结束前必须执行：
+
+```bash
+uv run pytest
+```
+
+- v1 原有 41 条测试**必须全部通过**
+- 新增模块测试全部通过
+- 任何为了让新功能跑通而删改旧测试的行为，都必须在 commit message 中说明原因
+
+---
+
+## 6. CI 配置要点
+
+`.github/workflows/ci.yml`：
+
+1. 使用 `uv sync --group dev` 安装依赖
+2. 先跑 `ruff check`，再跑 `pytest`
+3. 不注入任何 API Key（验证 CI 测试确实不依赖外部服务）
+4. 缓存 uv 依赖以缩短构建时间
+
+> CI 跑绿的前提是所有需要网络的测试都已正确标记为 `live`。若 CI 失败于缺少 Key，说明标记遗漏，属于测试设计问题而非 CI 配置问题。

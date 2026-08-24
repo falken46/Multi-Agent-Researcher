@@ -19,6 +19,7 @@ requests>=2.31.0
 
 # Utils
 python-dotenv>=1.0.0
+pydantic-settings>=2.0.0
 rich>=13.0.0
 
 # Dev

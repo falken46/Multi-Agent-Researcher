@@ -7,6 +7,8 @@ from agents.state import ResearchState
 def test_create_initial_state() -> None:
     state = create_initial_state("测试主题")
 
+    trace_id = state.pop("trace_id")
+    assert trace_id
     assert state == {
         "topic": "测试主题",
         "sub_questions": [],

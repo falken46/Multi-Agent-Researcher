@@ -28,10 +28,11 @@ def make_state() -> ResearchState:
 
 
 def test_writer_outputs_final_report(monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_call(user_prompt: str, system_prompt: str) -> str:
+    def fake_call(user_prompt: str, system_prompt: str, trace_id: str) -> str:
         assert "AI Agent 趋势" in user_prompt
         assert "架构趋势摘要" in user_prompt
         assert "Writer Agent" in system_prompt
+        assert trace_id
         return "# AI Agent 趋势\n\n## 摘要\n测试报告。"
 
     monkeypatch.setattr(writer_module, "_call_writer_model", fake_call)
@@ -71,7 +72,7 @@ def test_writer_preserves_existing_errors(monkeypatch: pytest.MonkeyPatch) -> No
     state = make_state()
     state["errors"] = ["Researcher: previous error"]
 
-    def fake_call(user_prompt: str, system_prompt: str) -> str:
+    def fake_call(user_prompt: str, system_prompt: str, trace_id: str) -> str:
         raise RuntimeError("model failed")
 
     monkeypatch.setattr(writer_module, "_call_writer_model", fake_call)
@@ -86,4 +87,4 @@ def test_writer_rejects_non_ascii_api_key(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-测试")
 
     with pytest.raises(writer_module.WriterError, match="ASCII"):
-        writer_module._call_writer_model("user prompt", "system prompt")
+        writer_module._call_writer_model("user prompt", "system prompt", "trace-test")

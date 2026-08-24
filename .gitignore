@@ -35,3 +35,7 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Runtime data
+traces/
+.test-runtime/

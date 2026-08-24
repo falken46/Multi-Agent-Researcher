@@ -9,6 +9,7 @@ from typing import Any
 
 from agents.graph import create_initial_state, graph
 from agents.state import ResearchState
+from core.trace import emit, summarize
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +21,16 @@ def stream_research_progress(
     """运行 LangGraph,按节点状态变更输出 SSE 事件。"""
     normalized_topic = topic.strip()
     current_state: ResearchState = create_initial_state(normalized_topic)
+    trace_id = current_state["trace_id"]
 
     logger.info("research stream start topic=%r", normalized_topic[:100])
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "task_start",
+            "payload": {"topic": normalized_topic},
+        }
+    )
     yield _sse_event(
         event="start",
         payload={
@@ -34,6 +43,7 @@ def stream_research_progress(
     try:
         for update in compiled_graph.stream(current_state, stream_mode="updates"):
             for node_name, node_update in update.items():
+                previous_errors = list(current_state.get("errors", []))
                 if isinstance(node_update, dict):
                     current_state.update(node_update)
 
@@ -42,23 +52,52 @@ def stream_research_progress(
                     event="progress",
                     payload={
                         "node": node_name,
-                        "status": "completed",
+                        "status": _node_status(
+                            node_name=node_name,
+                            node_update=node_update,
+                            previous_errors=previous_errors,
+                            state=current_state,
+                        ),
                         "state": _state_summary(current_state),
                         "update": _safe_json_value(node_update),
                     },
                 )
 
+        final_status = _final_status(current_state)
+        emit(
+            {
+                "trace_id": trace_id,
+                "event": "task_end",
+                "payload": {"status": final_status},
+            }
+        )
         yield _sse_event(
             event="complete",
             payload={
                 "node": "end",
-                "status": "completed",
+                "status": final_status,
                 "state": _state_summary(current_state),
+                "trace": summarize(trace_id),
             },
         )
         logger.info("research stream complete topic=%r", normalized_topic[:100])
     except Exception as exc:
         logger.error("research stream failed: %s", exc)
+        emit(
+            {
+                "trace_id": trace_id,
+                "event": "error",
+                "node": "backend",
+                "payload": {"type": type(exc).__name__, "message": str(exc)},
+            }
+        )
+        emit(
+            {
+                "trace_id": trace_id,
+                "event": "task_end",
+                "payload": {"status": "failed"},
+            }
+        )
         yield _sse_event(
             event="error",
             payload={
@@ -85,7 +124,38 @@ def _state_summary(state: ResearchState) -> dict[str, Any]:
         "final_report": state.get("final_report", ""),
         "errors": state.get("errors", []),
         "retry_count": state.get("retry_count", 0),
+        "trace_id": state.get("trace_id", ""),
     }
+
+
+def _node_status(
+    node_name: str,
+    node_update: Any,
+    previous_errors: list[str],
+    state: ResearchState,
+) -> str:
+    if _has_new_errors(node_update=node_update, previous_errors=previous_errors):
+        if node_name == "researcher" and state.get("research_results"):
+            return "warning"
+        return "failed"
+    return "completed"
+
+
+def _final_status(state: ResearchState) -> str:
+    if state.get("final_report"):
+        return "completed"
+    if state.get("errors"):
+        return "failed"
+    return "empty"
+
+
+def _has_new_errors(node_update: Any, previous_errors: list[str]) -> bool:
+    if not isinstance(node_update, dict):
+        return False
+    updated_errors = node_update.get("errors")
+    if not isinstance(updated_errors, list):
+        return False
+    return len(updated_errors) > len(previous_errors)
 
 
 def _safe_json_value(value: Any) -> Any:

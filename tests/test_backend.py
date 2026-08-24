@@ -65,3 +65,26 @@ def test_stream_research_progress_emits_graph_updates() -> None:
     complete_payload = json.loads(events[-1]["data"])
     assert complete_payload["state"]["final_report"] == "# 报告"
     assert complete_payload["state"]["research_result_count"] == 1
+
+
+def test_stream_research_progress_marks_failed_node() -> None:
+    class FakeGraph:
+        def stream(self, state, stream_mode: str):
+            assert stream_mode == "updates"
+            yield {"planner": {"errors": ["Planner: Connection error."]}}
+            yield {
+                "writer": {
+                    "errors": [
+                        "Planner: Connection error.",
+                        "Writer: sub_questions must not be empty",
+                    ]
+                }
+            }
+
+    events = list(stream_research_progress("测试主题", compiled_graph=FakeGraph()))
+    planner_payload = json.loads(events[1]["data"])
+    complete_payload = json.loads(events[-1]["data"])
+
+    assert planner_payload["status"] == "failed"
+    assert complete_payload["status"] == "failed"
+    assert complete_payload["state"]["final_report"] == ""

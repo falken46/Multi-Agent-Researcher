@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Callable
 
-from dotenv import load_dotenv
 from langgraph.graph import END, START, StateGraph
 
 from agents.planner import planner_node
 from agents.researcher import researcher_node
 from agents.state import ResearchState
 from agents.writer import writer_node
-
-load_dotenv()
+from core.config import get_settings
+from core.trace import new_trace_id
 
 logger = logging.getLogger(__name__)
 
 GraphNode = Callable[[ResearchState], dict[str, object]]
-DEFAULT_MAX_RETRY = 2
 
 
 def create_initial_state(topic: str) -> ResearchState:
@@ -31,6 +28,7 @@ def create_initial_state(topic: str) -> ResearchState:
         "final_report": "",
         "errors": [],
         "retry_count": 0,
+        "trace_id": new_trace_id(),
     }
 
 
@@ -44,7 +42,7 @@ def should_retry(state: ResearchState) -> str:
         return "continue"
 
     retry_count = state.get("retry_count", 0)
-    max_retry = _get_max_retry()
+    max_retry = get_settings().max_retry
     if retry_count < max_retry:
         logger.info(
             "graph route retry: retry_count=%s max_retry=%s",
@@ -81,16 +79,6 @@ def build_graph(
     )
     graph_builder.add_edge("writer", END)
     return graph_builder.compile()
-
-
-def _get_max_retry() -> int:
-    raw_max_retry = os.getenv("MAX_RETRY", str(DEFAULT_MAX_RETRY)).strip()
-    try:
-        max_retry = int(raw_max_retry)
-    except ValueError:
-        return DEFAULT_MAX_RETRY
-    return max(0, max_retry)
-
 
 graph = build_graph()
 

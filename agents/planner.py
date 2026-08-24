@@ -4,77 +4,103 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+import time
 from typing import Any
-
-from dotenv import load_dotenv
-from openai import OpenAI
 
 from agents.prompt_loader import load_prompt
 from agents.state import ResearchState
-
-load_dotenv()
+from core.llm import LLMError, chat
+from core.trace import emit, new_trace_id
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODEL = "deepseek-v4-flash"
-DEFAULT_BASE_URL = "https://api.deepseek.com"
-
 
 class PlannerError(RuntimeError):
     """Planner Agent 规划失败时抛出。"""
 
 
-def planner_node(state: ResearchState) -> dict[str, list[str]]:
+def planner_node(state: ResearchState) -> dict[str, object]:
     """接收研究主题,返回 3-5 个研究子问题。"""
     topic = state.get("topic", "").strip()
+    trace_id = state.get("trace_id", "") or new_trace_id()
+    started_at = time.perf_counter()
     logger.info("planner_node enter topic=%r", topic[:100])
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "node_start",
+            "node": "planner",
+            "payload": {"topic_chars": len(topic)},
+        }
+    )
 
     try:
         if not topic:
             raise PlannerError("topic must not be empty")
 
         system_prompt = load_prompt("planner_system")
-        raw_content = _call_planner_model(topic=topic, system_prompt=system_prompt)
+        raw_content = _call_planner_model(
+            topic=topic,
+            system_prompt=system_prompt,
+            trace_id=trace_id,
+        )
         sub_questions = _parse_sub_questions(raw_content)
         logger.info("planner_node output sub_questions=%s", len(sub_questions))
+        emit(
+            {
+                "trace_id": trace_id,
+                "event": "node_end",
+                "node": "planner",
+                "payload": {
+                    "status": "completed",
+                    "sub_question_count": len(sub_questions),
+                    "latency_ms": (time.perf_counter() - started_at) * 1000,
+                },
+            }
+        )
         return {"sub_questions": sub_questions}
     except Exception as exc:
         logger.error("planner_node failed: %s", exc)
         errors = list(state.get("errors", []))
         errors.append(f"Planner: {exc}")
+        _emit_node_error(trace_id, exc, started_at)
         return {"errors": errors}
 
 
-def _call_planner_model(topic: str, system_prompt: str) -> str:
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        raise PlannerError("DEEPSEEK_API_KEY is not configured")
-    _validate_ascii_env_value("DEEPSEEK_API_KEY", api_key)
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url=os.getenv("DEEPSEEK_BASE_URL", DEFAULT_BASE_URL).strip(),
-    )
-    response = client.chat.completions.create(
-        model=os.getenv("MODEL_NAME", DEFAULT_MODEL).strip() or DEFAULT_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": topic},
-        ],
-        response_format={"type": "json_object"},
-    )
-    content = response.choices[0].message.content or ""
-    if not content.strip():
-        raise PlannerError("planner model returned empty content")
-    return content
-
-
-def _validate_ascii_env_value(name: str, value: str) -> None:
+def _call_planner_model(topic: str, system_prompt: str, trace_id: str) -> str:
     try:
-        value.encode("ascii")
-    except UnicodeEncodeError as exc:
-        raise PlannerError(f"{name} must contain ASCII characters only") from exc
+        return chat(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": topic},
+            ],
+            node="planner",
+            trace_id=trace_id,
+            json_mode=True,
+        ).content
+    except LLMError as exc:
+        raise PlannerError(str(exc)) from exc
+
+
+def _emit_node_error(trace_id: str, exc: Exception, started_at: float) -> None:
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "error",
+            "node": "planner",
+            "payload": {"type": type(exc).__name__, "message": str(exc)},
+        }
+    )
+    emit(
+        {
+            "trace_id": trace_id,
+            "event": "node_end",
+            "node": "planner",
+            "payload": {
+                "status": "failed",
+                "latency_ms": (time.perf_counter() - started_at) * 1000,
+            },
+        }
+    )
 
 
 def _parse_sub_questions(content: str) -> list[str]:

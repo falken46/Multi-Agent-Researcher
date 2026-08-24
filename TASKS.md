@@ -1,145 +1,181 @@
-# Multi-Agent 研究助手 - 任务拆解清单
+# DeepResearch Agent - 任务拆解清单 (v2)
 
-> 按 Phase 顺序执行，每个 Phase 完成后暂停验收。
-
-## Phase 0: 项目初始化（预计 0.5 天）
-
-- [x] T0.1 创建项目目录结构（按 ARCHITECTURE.md 4.目录结构）
-- [x] T0.2 初始化 git 仓库
-- [x] T0.3 创建 requirements.txt
-- [x] T0.4 创建 .env.example（DEEPSEEK_API_KEY, TAVILY_API_KEY）
-- [x] T0.5 创建 .gitignore
-- [x] T0.6 编写初版 README.md
-
-**验收标准**：`pip install -r requirements.txt` 成功
+> Phase 0—9 为 v1，已全部完成（详见 git 历史）。
+> v2 从 Phase 10 开始。每个 Phase 完成后暂停验收，并单独 commit。
 
 ---
 
-## Phase 1: 工具层实现（预计 1 天）
+## 进度总览
 
-- [x] T1.1 实现 `tools/web_search.py`（Tavily 优先，DuckDuckGo 备选）
-- [x] T1.2 实现 `tools/web_fetch.py`（requests + beautifulsoup4）
-- [x] T1.3 编写 `tests/test_tools.py`，每个工具至少 2 个测试
-- [x] T1.4 手动验证：在 Python REPL 中调用工具能返回真实数据
+| Phase | 内容 | 里程碑 | 状态 |
+|-------|------|--------|------|
+| 10 | 基础设施层（config / llm / trace / costs） | M1 | 🟨 待验收 |
+| 11 | RAG 检索层 | M1 | ⬜ |
+| 12 | Agent 编排升级（Critic / 并行 / Checkpoint） | M1 | ⬜ |
+| 13 | 评测体系 | M2 | ⬜ |
+| 14 | MCP Server | M3 | ⬜ |
+| 15 | 工程化（Docker / CI） | M2 | ⬜ |
+| 16 | 交付物（README / 架构图 / 简历映射 / 口述稿） | M1—M3 | ⬜ |
 
-**验收标准**：两个工具能独立工作并返回结构化数据
+**里程碑定义**
 
----
-
-## Phase 2: 状态定义与 Planner Agent（预计 1 天）
-
-- [x] T2.1 实现 `agents/state.py`：定义 ResearchState TypedDict
-- [x] T2.2 编写 `prompts/planner_system.md`（含 2 个 Few-shot 示例）
-- [x] T2.3 实现 `agents/planner.py`：planner_node 函数
-- [x] T2.4 编写 `tests/test_planner.py`：mock LLM，验证 JSON 解析
-- [x] T2.5 手动测试：单独运行 planner_node，验证输出结构
-
-**验收标准**：给定主题能稳定输出 3-5 个 JSON 格式的子问题
+- **M1 可投最低线**：Phase 10—12 + Phase 16 的 README 部分完成 → GitHub 上线，简历可挂链接
+- **M2 完整线**：+ Phase 13、15 → 有评测数据与工程化证据
+- **M3 加分线**：+ Phase 14 → MCP Server 与 Demo 录制
 
 ---
 
-## Phase 3: Researcher Agent（预计 1.5 天）
+## Phase 10: 基础设施层
 
-- [x] T3.1 编写 `prompts/researcher_system.md`
-- [x] T3.2 实现 `agents/researcher.py`：researcher_node 函数
-- [x] T3.3 实现子问题循环 + 工具调用 + 资料摘要
-- [x] T3.4 实现错误捕获与 errors 日志写入
-- [x] T3.5 编写 `tests/test_researcher.py`：mock 工具调用
-- [x] T3.6 手动测试：单独运行，输入 3 个子问题，观察输出
+> 目标：把散落的配置、LLM 调用与日志收敛成三个可复用模块，为后续所有 Phase 提供地基。
 
-**验收标准**：每个子问题都能产出含来源 URL 的资料摘要
+- [x] T10.1 `core/config.py`：pydantic-settings 定义全部配置项，带默认值与类型校验
+- [x] T10.2 `core/costs.py`：模型价格表（从配置读取）+ `estimate()` 换算函数
+- [x] T10.3 `core/trace.py`：`new_trace_id()` / `emit(event)` / `summarize(trace_id)`，JSONL 落盘
+- [x] T10.4 `core/llm.py`：统一 `chat()` / `achat()`，含超时、指数退避重试、token 计量、自动写 trace
+- [x] T10.5 改造 `agents/planner.py`、`agents/researcher.py`、`agents/writer.py` 改用 `core.llm`
+- [x] T10.6 更新 `.env.example`
+- [x] T10.7 `tests/test_core_llm.py`、`tests/test_core_trace.py`
 
----
+**验收标准**
 
-## Phase 4: Writer Agent（预计 0.5 天）
-
-- [x] T4.1 编写 `prompts/writer_system.md`（含 Markdown 模板示例）
-- [x] T4.2 实现 `agents/writer.py`：writer_node 函数
-- [x] T4.3 实现 prompt 拼装（topic + questions + results）
-- [x] T4.4 编写 `tests/test_writer.py`
-- [x] T4.5 手动测试：用静态数据生成报告
-
-**验收标准**：能输出结构完整的 Markdown 报告
+- 三个 Agent 不再各自构造 OpenAI client，也不再直接读环境变量
+- 跑一次任务后，`traces/` 下生成 JSONL，`summarize()` 能算出总 token 与总耗时
+- 原有 41 条测试仍全部通过（**回归红线**）
 
 ---
 
-## Phase 5: LangGraph 状态机集成（预计 1 天）
+## Phase 11: RAG 检索层
 
-- [x] T5.1 实现 `agents/graph.py`：构建 StateGraph
-- [x] T5.2 添加 planner → researcher → writer 主路径
-- [x] T5.3 实现 `should_retry` 条件边逻辑
-- [x] T5.4 添加 retry_count 上限保护（max=2）
-- [x] T5.5 编写 `tests/test_graph.py`：端到端 mock 测试
-- [x] T5.6 手动测试：完整运行一次"AI Agent 趋势"主题
+> 目标：补齐"自建检索层"这一最大能力缺口。本 Phase 是整个 v2 的技术核心。
 
-**验收标准**：状态机能完整跑通三 Agent 流程，含失败重试
+- [ ] T11.1 `rag/loader.py`：`.md` / `.txt` / `.pdf` 解析，失败不中断建库
+- [ ] T11.2 `rag/splitter.py`：递归字符切分，中文标点优先，携带 chunk 元数据
+- [ ] T11.3 `rag/embeddings.py`：可插拔后端（`fastembed` / `remote` / `fake`）
+- [ ] T11.4 `rag/vectorstore.py`：Chroma 封装，只暴露 `add` / `query` / `count`
+- [ ] T11.5 `rag/bm25.py`：jieba 分词 + BM25 索引，与向量库共享 chunk id
+- [ ] T11.6 `rag/hybrid.py`：RRF 融合
+- [ ] T11.7 `rag/rerank.py`：ONNX cross-encoder 与 LLM rerank 两种实现，可切换
+- [ ] T11.8 `rag/pipeline.py`：`build_index()` 与 `search()` 统一入口
+- [ ] T11.9 `rag/index_cli.py`：命令行建库
+- [ ] T11.10 `tools/kb_search.py`：封装为工具，返回 `hits` 与 `max_score`
+- [ ] T11.11 准备知识库语料（`data/kb/`，20—40 篇技术文档）
+- [ ] T11.12 `tests/test_rag_*.py`：切分、融合、检索各一组测试（使用 `fake` embedding 后端保证确定性）
 
----
+**验收标准**
 
-## Phase 6: FastAPI 后端（预计 1 天）
-
-- [x] T6.1 实现 `backend/api.py`：基础 FastAPI app
-- [x] T6.2 实现 `/research` POST 接口
-- [x] T6.3 实现 `backend/streaming.py`：SSE 流式推送
-- [x] T6.4 集成 LangGraph 的 stream 模式（按 node 推送状态）
-- [x] T6.5 添加 CORS 配置（允许 Streamlit 访问）
-- [x] T6.6 手动测试：用 curl 触发并观察 SSE 输出
-
-**验收标准**：后端能流式返回每个 Agent 的状态变更
-
----
-
-## Phase 7: Streamlit 前端（预计 1 天）
-
-- [ ] T7.1 实现 `frontend/app.py`：基础布局
-- [ ] T7.2 实现主题输入与启动按钮
-- [ ] T7.3 实现 SSE 客户端订阅与进度展示
-- [ ] T7.4 实现 Agent 状态分块展示（Planner / Researcher / Writer）
-- [ ] T7.5 实现最终 Markdown 渲染与下载按钮
-- [ ] T7.6 手动测试：浏览器端走完完整流程
-
-**验收标准**：前端能稳定展示完整研究流程并下载报告
+- `python -m rag.index_cli --dir data/kb` 能成功建库并输出切片数量
+- `kb_search("某个语料内明确存在的问题")` 能返回正确文档，且分数明显高于无关问题
+- 单独关闭向量通道或 BM25 通道，检索仍可运行（可降级）
+- 切分与融合逻辑有确定性测试，不依赖网络
 
 ---
 
-## Phase 8: Docker 容器化（预计 0.5 天）
+## Phase 12: Agent 编排升级
 
-- [ ] T8.1 编写 Dockerfile.backend
-- [ ] T8.2 编写 Dockerfile.frontend
-- [ ] T8.3 编写 docker-compose.yml
-- [ ] T8.4 测试 `docker-compose up` 一键启动
-- [ ] T8.5 更新 README.md，补充 Docker 启动说明
+> 目标：把线性流程升级为带反思回环的并行状态机。
 
-**验收标准**：在干净环境通过 docker-compose 启动并完成一次研究任务
+- [ ] T12.1 `agents/state.py` 扩展：citations / critique / quality_score / missing_aspects / revision_count / trace_id / usage
+- [ ] T12.2 `prompts/critic_system.md`：含明确评分锚点与 JSON schema 说明
+- [ ] T12.3 `agents/critic.py`：结构化输出 + 解析失败降级
+- [ ] T12.4 `agents/researcher.py` 异步化：`asyncio.gather` + `Semaphore` + `return_exceptions=True`
+- [ ] T12.5 Researcher 双通道：`kb_search` 优先，`max_score` 低于阈值降级 `web_search`，降级事件写 trace
+- [ ] T12.6 Researcher 返工模式：`missing_aspects` 非空时只查缺口
+- [ ] T12.7 `agents/graph.py`：新增 critic 节点与 `should_revise` 条件边
+- [ ] T12.8 防死循环三重保险（硬上限 / 定向补查 / 分数无提升即退出）
+- [ ] T12.9 接入 SqliteSaver Checkpointer
+- [ ] T12.10 `backend/api.py` 扩展 SSE 事件类型
+- [ ] T12.11 `frontend/app.py` 展示反思过程与 usage
+- [ ] T12.12 `tests/test_critic.py`、`tests/test_graph_revision.py`（mock LLM，验证回环与上限）
+
+**验收标准**
+
+- 构造一个低质量场景，能观察到 Critic 打低分 → 回退 Researcher → 分数提升 → 进入 Writer
+- 构造一个永远不达标的场景，验证回退次数**严格不超过** `MAX_REVISION`
+- 并行前后耗时对比有实测数据（写入 Phase 13 评测报告）
+- 中断任务后可从 Checkpoint 恢复
+
+> ⭐ **Phase 12 完成即达 M1 可投最低线**，此时应立即执行 Phase 16 的 README 部分并推送 GitHub，不要等后续 Phase。
 
 ---
 
-## Phase 9: 端到端验收测试（预计 0.5 天）
+## Phase 13: 评测体系
 
-- [ ] T9.1 编写 `tests/test_e2e.py`：mock 模式下的完整流程测试
-- [ ] T9.2 运行 5 个真实主题（参考 TESTING.md）
-- [ ] T9.3 撰写验收报告 `tests/acceptance_report.md`
-- [ ] T9.4 录制一次完整 Demo 演示（截图或 GIF）
+> 目标：产出简历上所有量化数字。详细方案见 `EVAL.md`。
 
-**验收标准**：5 个主题中至少 4 个能完整产出合格报告
+- [ ] T13.1 构造评测集 `eval/dataset/qa.jsonl`（30 题：本地可答 / 需联网 / 混合 三类）
+- [ ] T13.2 为本地可答类标注 gold chunk，用于计算召回指标
+- [ ] T13.3 `eval/metrics.py`：召回命中率、引用可溯源率、任务完成率、token / 成本 / 耗时、反思触发率
+- [ ] T13.4 `eval/runner.py`：支持按配置组合批量跑（A/B/C/D 四组）
+- [ ] T13.5 `eval/report.py`：生成 Markdown 对照表到 `eval/reports/`
+- [ ] T13.6 跑完四组对照实验，产出真实数据
+- [ ] T13.7 把关键数字回填到 `README.md` 与 `RESUME_MAPPING.md`
+
+**验收标准**
+
+- 四组实验数据完整，每组指标可复现
+- 每一项优化（混合检索 / 重排 / 并行 / 反思）都有独立归因的数字
+- **红线**：报告中不出现任何未实际跑出的估计值
 
 ---
 
-## 总体时间预算
+## Phase 14: MCP Server
 
-| 阶段 | 预计耗时 | 累计 |
-|------|----------|------|
-| Phase 0-1 | 1.5 天 | 1.5 天 |
-| Phase 2-4 | 3 天 | 4.5 天 |
-| Phase 5 | 1 天 | 5.5 天 |
-| Phase 6-7 | 2 天 | 7.5 天 |
-| Phase 8-9 | 1 天 | 8.5 天 |
-| **合计** | **8.5 天** | （每天 4-6 小时投入） |
+- [ ] T14.1 `mcp/server.py`：FastMCP 暴露 `deep_research` 与 `kb_search`
+- [ ] T14.2 工具描述与参数 schema 编写（面向 LLM 客户端的可读性）
+- [ ] T14.3 在 Claude Code 中实测调用成功
+- [ ] T14.4 README 补充客户端配置片段与调用截图
+- [ ] T14.5 `tests/test_mcp_server.py`
 
-## 阶段间检查点
+**验收标准**
 
-每个 Phase 完成后，作者必须：
-1. ✅ 所有任务勾选完毕
-2. ✅ 对应测试通过
-3. ✅ 能用自己的话讲清楚本阶段实现了什么
-4. ✅ Git commit（commit message 标注 Phase 名）
+- 在真实 MCP 客户端中能看到工具、成功调用并拿到结果
+- 有可直接复制的配置示例
+
+---
+
+## Phase 15: 工程化
+
+- [ ] T15.1 `Dockerfile.backend`（多阶段构建，控制镜像体积）
+- [ ] T15.2 `Dockerfile.frontend`
+- [ ] T15.3 `docker-compose.yml`（含向量库与 trace 目录挂载）
+- [ ] T15.4 干净环境验证 `docker-compose up`
+- [ ] T15.5 `.github/workflows/ci.yml`：ruff lint + pytest
+- [ ] T15.6 CI 中排除需要真实 API Key 的测试（标记 `@pytest.mark.live`）
+
+**验收标准**
+
+- 干净环境一键启动并完成一次研究任务
+- CI 徽章为绿色，且不依赖任何私密 Key
+
+---
+
+## Phase 16: 交付物
+
+> 这一 Phase 决定项目在简历场景下的实际价值，优先级不低于任何技术 Phase。
+
+- [ ] T16.1 重写 `README.md`：定位一句话、架构图、快速开始、评测对照表、技术决策摘要
+- [ ] T16.2 架构图（ASCII 或图片二选一，保证 GitHub 上直接可见）
+- [ ] T16.3 Demo 截图 / GIF
+- [ ] T16.4 `RESUME_MAPPING.md` 回填真实数字
+- [ ] T16.5 中文技术口述稿（每个模块 3 分钟讲清"做了什么 / 为什么这么做 / 数据是多少"）
+- [ ] T16.6 推送 GitHub，仓库名 `deepresearch-agent`，补充 topics 与简介
+
+**验收标准**
+
+- README 在不看代码的前提下能让人明白系统做什么、怎么做、效果如何
+- 每条简历 bullet 都能在仓库中指到具体文件
+- 口述稿覆盖 `RESUME_MAPPING.md` 中列出的全部面试问题
+
+---
+
+## 执行约定
+
+沿用 v1 的阶段检查点，每个 Phase 完成后：
+
+1. 该 Phase 全部任务勾选
+2. `uv run pytest` 全绿（含 v1 原有 41 条，**回归红线**）
+3. 能用中文讲清本阶段做了什么、为什么这么做
+4. git commit，message 标注 Phase 编号
+
+**跨 Phase 红线**：任何一个 Phase 都不得破坏 v1 已通过验收的功能。若必须破坏，先在本文档记录原因与迁移方案。

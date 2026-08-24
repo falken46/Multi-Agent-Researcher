@@ -44,8 +44,10 @@ def test_researcher_returns_summary_per_question(
         question: str,
         search_results: list[SearchResult],
         system_prompt: str,
+        trace_id: str,
     ) -> str:
         assert "Researcher Agent" in system_prompt
+        assert trace_id
         return f"{question} 的资料摘要"
 
     monkeypatch.setattr(researcher_module, "web_search", fake_web_search)
@@ -71,6 +73,7 @@ def test_researcher_continues_when_one_question_fails(
         question: str,
         search_results: list[SearchResult],
         system_prompt: str,
+        trace_id: str,
     ) -> str:
         return f"{question} 摘要"
 
@@ -105,3 +108,16 @@ def test_researcher_preserves_existing_errors(
 
     assert result["errors"][0] == "Planner: previous error"
     assert result["errors"][1].startswith("Researcher: 问题 A")
+
+
+def test_researcher_captures_prompt_load_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_prompt_load(name: str) -> str:
+        raise RuntimeError("prompt unavailable")
+
+    monkeypatch.setattr(researcher_module, "load_prompt", fail_prompt_load)
+
+    result = researcher_node(make_state(["问题 A"]))
+
+    assert result["errors"] == ["Researcher: prompt unavailable"]
