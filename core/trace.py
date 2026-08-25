@@ -169,6 +169,12 @@ def summarize(trace_id: str) -> dict[str, Any]:
     }
 
 
+def read_events(trace_id: str) -> list[dict[str, Any]]:
+    """读取按时间排序的结构化事件，供评测层复核而不解析普通日志。"""
+    _validate_trace_id(trace_id)
+    return _read_events(trace_id, get_settings().trace_dir)
+
+
 def _normalize_event(event: Mapping[str, Any]) -> dict[str, Any]:
     trace_id = str(event.get("trace_id", "")).strip()
     _validate_trace_id(trace_id)
@@ -251,5 +257,5 @@ def _as_float(value: Any) -> float:
         return 0.0
 
 
-__all__ = ["TraceEvent", "emit", "new_trace_id", "summarize"]
+__all__ = ["TraceEvent", "emit", "new_trace_id", "read_events", "summarize"]
 

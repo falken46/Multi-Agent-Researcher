@@ -32,6 +32,18 @@ class BuildReport:
     channel_errors: dict[str, str]
 
 
+@dataclass(frozen=True)
+class SearchDiagnostics:
+    """一次检索的有序结果、候选集与跨排序后端稳定的降级置信度。"""
+
+    hits: list[RetrievalResult]
+    candidates: list[RetrievalResult]
+    fallback_confidence: float
+    fallback_confidence_kind: str
+    channel_errors: dict[str, str]
+    latency_ms: float
+
+
 def build_index(
     directory: Path | str | None = None,
     *,
@@ -110,7 +122,23 @@ def search(
     trace_id: str | None = None,
     settings: Settings | None = None,
 ) -> list[RetrievalResult]:
-    """查询可用通道、RRF 融合并按配置重排。"""
+    """查询可用通道并返回最终排序结果。"""
+    return search_with_diagnostics(
+        query,
+        top_n=top_n,
+        trace_id=trace_id,
+        settings=settings,
+    ).hits
+
+
+def search_with_diagnostics(
+    query: str,
+    top_n: int | None = None,
+    *,
+    trace_id: str | None = None,
+    settings: Settings | None = None,
+) -> SearchDiagnostics:
+    """查询、融合和重排，并保留 rerank 前的稳定向量置信度。"""
     normalized_query = query.strip()
     if not normalized_query:
         raise ValueError("query must not be empty")
@@ -152,11 +180,22 @@ def search(
     available_results = {
         channel: results for channel, results in channel_results.items() if results
     }
-    fused = rrf_fuse(available_results, rrf_k=current.rrf_k)
+    vector_results = available_results.get("vector", [])
+    fallback_confidence = max(
+        (item.fallback_confidence or 0.0 for item in vector_results),
+        default=0.0,
+    )
+    fallback_confidence_kind = (
+        "vector_cosine_similarity" if vector_results else "unavailable"
+    )
+    if len(available_results) == 1:
+        candidates = list(next(iter(available_results.values())))
+    else:
+        candidates = rrf_fuse(available_results, rrf_k=current.rrf_k)
     try:
         results = rerank(
             normalized_query,
-            fused,
+            candidates,
             top_n=result_limit,
             trace_id=trace_id,
             settings=current,
@@ -164,7 +203,7 @@ def search(
     except Exception as exc:
         channel_errors["rerank"] = str(exc)
         logger.warning("kb rerank degraded error=%s", exc)
-        results = fused[:result_limit]
+        results = candidates[:result_limit]
 
     latency_ms = (time.perf_counter() - started_at) * 1000
     logger.info(
@@ -182,15 +221,41 @@ def search(
                 "node": "kb_search",
                 "payload": {
                     "query": normalized_query[:200],
-                    "hit_count": len(results),
                     "channels": sorted(available_results),
                     "channel_errors": channel_errors,
-                    "max_score": max((item.score for item in results), default=0.0),
+                    "candidate_count": len(candidates),
+                    "candidate_chunk_ids": [
+                        item.chunk_id for item in candidates
+                    ],
+                    "hit_count": len(results),
+                    "hit_chunk_ids": [item.chunk_id for item in results],
+                    "ranking_max_score": max(
+                        (item.ranking_score for item in results),
+                        default=0.0,
+                    ),
+                    "ranking_score_kind": (
+                        results[0].score_kind if results else "unavailable"
+                    ),
+                    "fallback_confidence": fallback_confidence,
+                    "fallback_confidence_kind": fallback_confidence_kind,
                     "latency_ms": latency_ms,
                 },
             }
         )
-    return results
+    return SearchDiagnostics(
+        hits=results,
+        candidates=candidates,
+        fallback_confidence=fallback_confidence,
+        fallback_confidence_kind=fallback_confidence_kind,
+        channel_errors=channel_errors,
+        latency_ms=latency_ms,
+    )
 
 
-__all__ = ["BuildReport", "build_index", "search"]
+__all__ = [
+    "BuildReport",
+    "SearchDiagnostics",
+    "build_index",
+    "search",
+    "search_with_diagnostics",
+]

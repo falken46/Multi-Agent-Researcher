@@ -15,9 +15,14 @@ from rag.rerank import rerank
 def test_onnx_rerank_uses_cross_encoder_scores(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    rerank_module._load_onnx_model.cache_clear()
+    initialization_count = 0
+
     class FakeCrossEncoder:
         def __init__(self, model_name: str) -> None:
+            nonlocal initialization_count
             assert model_name == "fake-reranker"
+            initialization_count += 1
 
         def rerank(self, query: str, documents: list[str]) -> Iterator[float]:
             assert query == "哪个更相关"
@@ -32,10 +37,15 @@ def test_onnx_rerank_uses_cross_encoder_scores(
     )
 
     results = rerank("哪个更相关", _candidates(), top_n=1, settings=settings)
+    rerank("哪个更相关", _candidates(), top_n=1, settings=settings)
 
     assert results[0].chunk_id == "b"
     assert results[0].score == pytest.approx(0.9)
     assert results[0].channel.endswith("onnx_rerank")
+    assert results[0].score_kind == "onnx_rerank"
+    assert results[0].fallback_confidence == pytest.approx(0.8)
+    assert initialization_count == 1
+    rerank_module._load_onnx_model.cache_clear()
 
 
 def test_llm_rerank_parsing_failure_degrades_to_neutral_scores(
@@ -59,10 +69,30 @@ def test_llm_rerank_parsing_failure_degrades_to_neutral_scores(
     assert [item.chunk_id for item in results] == ["a", "b"]
     assert all(item.score == 0.5 for item in results)
     assert all(item.channel.endswith("llm_rerank") for item in results)
+    assert all(item.score_kind == "llm_rerank" for item in results)
+    assert [item.fallback_confidence for item in results] == [0.7, 0.8]
 
 
 def _candidates() -> list[RetrievalResult]:
     return [
-        RetrievalResult("a", "候选 A", "a.md", 0, 0.03, "bm25+vector"),
-        RetrievalResult("b", "候选 B", "b.md", 0, 0.02, "vector"),
+        RetrievalResult(
+            "a",
+            "候选 A",
+            "a.md",
+            0,
+            0.03,
+            "bm25+vector",
+            fallback_confidence=0.7,
+            score_kind="rrf",
+        ),
+        RetrievalResult(
+            "b",
+            "候选 B",
+            "b.md",
+            0,
+            0.02,
+            "vector",
+            fallback_confidence=0.8,
+            score_kind="rrf",
+        ),
     ]

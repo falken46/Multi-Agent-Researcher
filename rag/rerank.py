@@ -6,6 +6,8 @@ import json
 import logging
 from collections.abc import Sequence
 from dataclasses import replace
+from functools import lru_cache
+from typing import Any
 
 from core.config import Settings, get_settings
 from core.llm import chat
@@ -53,19 +55,31 @@ def _onnx_rerank(
     top_n: int,
     model_name: str,
 ) -> list[RetrievalResult]:
-    try:
-        from fastembed.rerank.cross_encoder import TextCrossEncoder
-    except ImportError as exc:
-        raise RuntimeError("ONNX rerank requires the fastembed package") from exc
-    model = TextCrossEncoder(model_name=model_name)
+    model = _load_onnx_model(model_name)
     scores = list(model.rerank(query, [item.text for item in candidates]))
     if len(scores) != len(candidates):
         raise RuntimeError("ONNX reranker returned an invalid score count")
     reranked = [
-        replace(item, score=float(score), channel=f"{item.channel}+onnx_rerank")
+        replace(
+            item,
+            score=float(score),
+            channel=f"{item.channel}+onnx_rerank",
+            score_kind="onnx_rerank",
+        )
         for item, score in zip(candidates, scores)
     ]
     return sorted(reranked, key=lambda item: (-item.score, item.chunk_id))[:top_n]
+
+
+@lru_cache(maxsize=4)
+def _load_onnx_model(model_name: str) -> Any:
+    """按模型名缓存 ONNX 会话，避免评测时为每道 query 重复加载模型。"""
+
+    try:
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+    except ImportError as exc:
+        raise RuntimeError("ONNX rerank requires the fastembed package") from exc
+    return TextCrossEncoder(model_name=model_name)
 
 
 def _llm_rerank(
@@ -107,6 +121,7 @@ def _llm_rerank(
             item,
             score=score_by_id.get(item.chunk_id, 0.5),
             channel=f"{item.channel}+llm_rerank",
+            score_kind="llm_rerank",
         )
         for item in candidates
     ]

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, Protocol, TypedDict
 
 from langgraph.types import StreamWriter
 
@@ -29,6 +29,16 @@ class Evidence(TypedDict):
     origin: Literal["kb", "web"]
 
 
+class WebSearcher(Protocol):
+    """Researcher 使用的最小 Web 搜索协议，供评测缓存显式注入。"""
+
+    def __call__(
+        self,
+        query: str,
+        max_results: int = 3,
+    ) -> list[SearchResult]: ...
+
+
 @dataclass(frozen=True)
 class ResearchOutcome:
     target: str
@@ -49,6 +59,9 @@ async def researcher_node(
     state: ResearchState,
     *,
     writer: StreamWriter = _no_op_stream_writer,
+    settings: Settings | None = None,
+    web_searcher: WebSearcher | None = None,
+    fail_fast_exceptions: tuple[type[BaseException], ...] = (),
 ) -> dict[str, object]:
     """并发研究普通子问题；返工时只补查 Critic 指出的缺口。"""
     sub_questions = state.get("sub_questions", [])
@@ -56,13 +69,14 @@ async def researcher_node(
     revision_mode = bool(missing_aspects)
     targets = missing_aspects or sub_questions
     trace_id = state.get("trace_id", "") or new_trace_id()
-    settings = get_settings()
+    current = settings or get_settings()
+    current_web_searcher = web_searcher or web_search
     started_at = time.perf_counter()
     logger.info(
         "researcher_node enter targets=%s revision_mode=%s concurrency=%s",
         len(targets),
         revision_mode,
-        settings.research_concurrency,
+        current.research_concurrency,
     )
     emit(
         {
@@ -72,7 +86,7 @@ async def researcher_node(
             "payload": {
                 "target_count": len(targets),
                 "revision_mode": revision_mode,
-                "concurrency": settings.research_concurrency,
+                "concurrency": current.research_concurrency,
             },
         }
     )
@@ -116,8 +130,8 @@ async def researcher_node(
         )
         _write_custom_event(writer, "revision", revision_payload)
 
-    semaphore = asyncio.Semaphore(settings.research_concurrency)
-    timeout_seconds = _research_timeout(settings)
+    semaphore = asyncio.Semaphore(current.research_concurrency)
+    timeout_seconds = _research_timeout(current)
     gathered = await asyncio.gather(
         *(
             _research_with_limit(
@@ -126,8 +140,9 @@ async def researcher_node(
                 timeout_seconds=timeout_seconds,
                 system_prompt=system_prompt,
                 trace_id=trace_id,
-                settings=settings,
+                settings=current,
                 stream_writer=writer,
+                web_searcher=current_web_searcher,
             )
             for target in targets
         ),
@@ -138,6 +153,8 @@ async def researcher_node(
     fallback_queries = list(state.get("fallback_queries", []))
     for target, item in zip(targets, gathered):
         if isinstance(item, BaseException):
+            if fail_fast_exceptions and isinstance(item, fail_fast_exceptions):
+                raise item
             message = _exception_message(item)
             errors.append(f"Researcher: {target} | {message}")
             logger.error("researcher_node target failed target=%r error=%s", target, message)
@@ -216,6 +233,7 @@ async def _research_with_limit(
     trace_id: str,
     settings: Settings,
     stream_writer: StreamWriter,
+    web_searcher: WebSearcher,
 ) -> ResearchOutcome:
     async with semaphore:
         return await asyncio.wait_for(
@@ -225,6 +243,7 @@ async def _research_with_limit(
                 trace_id=trace_id,
                 settings=settings,
                 stream_writer=stream_writer,
+                web_searcher=web_searcher,
             ),
             timeout=timeout_seconds,
         )
@@ -237,6 +256,7 @@ async def _research_question(
     trace_id: str,
     settings: Settings,
     stream_writer: StreamWriter,
+    web_searcher: WebSearcher,
 ) -> ResearchOutcome:
     normalized_question = question.strip()
     if not normalized_question:
@@ -245,14 +265,24 @@ async def _research_question(
     kb_result, kb_error = await _search_kb(normalized_question, trace_id)
     evidence = _kb_evidence(kb_result["hits"])
     citations = _citations_from_evidence(evidence)
-    max_score = kb_result["max_score"]
+    ranking_max_score = kb_result["max_score"]
+    fallback_confidence = kb_result.get(
+        "fallback_confidence",
+        ranking_max_score,
+    )
+    fallback_confidence_kind = kb_result.get(
+        "fallback_confidence_kind",
+        "legacy_ranking_score",
+    )
     fallback_query: str | None = None
-    if kb_error or max_score < settings.kb_score_threshold:
+    if kb_error or fallback_confidence < settings.kb_score_threshold:
         fallback_query = normalized_question
         fallback_payload = {
             "node": "researcher",
             "query": normalized_question,
-            "max_score": max_score,
+            "ranking_max_score": ranking_max_score,
+            "fallback_confidence": fallback_confidence,
+            "fallback_confidence_kind": fallback_confidence_kind,
             "threshold": settings.kb_score_threshold,
             "reason": "kb_error" if kb_error else "low_score",
         }
@@ -266,7 +296,7 @@ async def _research_question(
         )
         _write_custom_event(stream_writer, "fallback", fallback_payload)
         web_results = await asyncio.to_thread(
-            web_search,
+            web_searcher,
             normalized_question,
             max_results=MAX_SEARCH_RESULTS,
         )
@@ -305,7 +335,12 @@ async def _search_kb(query: str, trace_id: str) -> tuple[KBSearchResult, str | N
         return result, None
     except Exception as exc:
         logger.warning("kb search failed; falling back query=%r error=%s", query, exc)
-        return {"hits": [], "max_score": 0.0}, str(exc)
+        return {
+            "hits": [],
+            "max_score": 0.0,
+            "fallback_confidence": 0.0,
+            "fallback_confidence_kind": "unavailable",
+        }, str(exc)
 
 
 async def _call_summary_model(

@@ -20,6 +20,7 @@ def rrf_fuse(
     scores: dict[str, float] = {}
     results: dict[str, RetrievalResult] = {}
     memberships: dict[str, set[str]] = {}
+    fallback_confidences: dict[str, float] = {}
     for channel_name in sorted(channels):
         for rank, result in enumerate(channels[channel_name], start=1):
             scores[result.chunk_id] = scores.get(result.chunk_id, 0.0) + 1.0 / (
@@ -27,12 +28,19 @@ def rrf_fuse(
             )
             results.setdefault(result.chunk_id, result)
             memberships.setdefault(result.chunk_id, set()).add(channel_name)
+            if result.fallback_confidence is not None:
+                fallback_confidences[result.chunk_id] = max(
+                    fallback_confidences.get(result.chunk_id, 0.0),
+                    result.fallback_confidence,
+                )
 
     fused = [
         replace(
             result,
             score=scores[chunk_id],
             channel="+".join(sorted(memberships[chunk_id])),
+            fallback_confidence=fallback_confidences.get(chunk_id),
+            score_kind="rrf",
         )
         for chunk_id, result in results.items()
     ]

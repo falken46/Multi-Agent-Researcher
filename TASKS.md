@@ -9,13 +9,13 @@
 
 | Phase | 内容 | 里程碑 | 状态 |
 |-------|------|--------|------|
-| 10 | 基础设施层（config / llm / trace / costs） | M1 | 🟨 待验收 |
-| 11 | RAG 检索层 | M1 | ⬜ |
-| 12 | Agent 编排升级（Critic / 并行 / Checkpoint） | M1 | 🟨 待验收 |
-| 13 | 评测体系 | M2 | ⬜ |
+| 10 | 基础设施层（config / llm / trace / costs） | M1 | ✅ 已完成 |
+| 11 | RAG 检索层 | M1 | ✅ 已完成 |
+| 12 | Agent 编排升级（Critic / 并行 / Checkpoint） | M1 | ✅ 功能完成 |
+| 13 | 评测体系 | M2 | 🟨 进行中 |
 | 14 | MCP Server | M3 | ⬜ |
 | 15 | 工程化（Docker / CI） | M2 | ⬜ |
-| 16 | 交付物（README / 架构图 / 简历映射 / 口述稿） | M1—M3 | ⬜ |
+| 16 | 交付物（README / 架构图 / 简历映射 / 口述稿） | M1—M3 | 🟨 部分完成 |
 
 **里程碑定义**
 
@@ -103,13 +103,17 @@
 
 > 目标：产出简历上所有量化数字。详细方案见 `EVAL.md`。
 
-- [ ] T13.1 构造评测集 `eval/dataset/qa.jsonl`（30 题：本地可答 / 需联网 / 混合 三类）
-- [ ] T13.2 为本地可答类标注 gold chunk，用于计算召回指标
-- [ ] T13.3 `eval/metrics.py`：召回命中率、引用可溯源率、任务完成率、token / 成本 / 耗时、反思触发率
-- [ ] T13.4 `eval/runner.py`：支持按配置组合批量跑（A/B/C/D 四组）
-- [ ] T13.5 `eval/report.py`：生成 Markdown 对照表到 `eval/reports/`
-- [ ] T13.6 跑完四组对照实验，产出真实数据
-- [ ] T13.7 把关键数字回填到 `README.md` 与 `RESUME_MAPPING.md`
+- [x] T13.1 接入公开 `C-MTEB/T2Reranking` 检索集，并构造 15 题端到端编排集
+- [x] T13.2 用公开 positive / hard negative / qrels 生成共享 passage 池，替代人工 gold 标注
+- [x] T13.3 `eval/metrics.py`：Candidate Recall@20、Hit@5、MRR@5、引用有效性、任务完成率及 trace 成本/耗时/行为指标
+- [x] T13.4a `eval/retrieval_runner.py`：共享索引运行 R1—R4，输出候选 / Top5 / gold 结构化 raw
+- [x] T13.4b `eval/orchestration_runner.py`：固定 Planner、query cache、P1/P2 与 Q1/Q2 编排对照
+- [x] T13.5a `eval/report.py`：从 R 轨 raw 重算指标并生成 Markdown 对照表
+- [x] T13.5b 报告生成器接入 P/Q raw + trace 汇总与组间差值
+- [x] T13.6a 跑完 100 题 R1—R4，产出 400 条真实检索观测
+- [ ] T13.6b 跑完 P1/P2 并行微基准与 Q1/Q2 Critic 对照，产出真实编排数据
+- [x] T13.7a 把 R 轨关键数字回填到 `README.md` 与 `RESUME_MAPPING.md`
+- [ ] T13.7b P/Q 轨完成后回填耗时、成本、覆盖与引用数字
 
 **验收标准**
 
@@ -154,8 +158,8 @@
 
 > 这一 Phase 决定项目在简历场景下的实际价值，优先级不低于任何技术 Phase。
 
-- [ ] T16.1 重写 `README.md`：定位一句话、架构图、快速开始、评测对照表、技术决策摘要
-- [ ] T16.2 架构图（ASCII 或图片二选一，保证 GitHub 上直接可见）
+- [x] T16.1 重写 `README.md`：定位一句话、架构图、快速开始、评测对照表、技术决策摘要（真实指标待 Phase 13 回填）
+- [x] T16.2 架构图（ASCII 或图片二选一，保证 GitHub 上直接可见）
 - [ ] T16.3 Demo 截图 / GIF
 - [ ] T16.4 `RESUME_MAPPING.md` 回填真实数字
 - [ ] T16.5 中文技术口述稿（每个模块 3 分钟讲清"做了什么 / 为什么这么做 / 数据是多少"）

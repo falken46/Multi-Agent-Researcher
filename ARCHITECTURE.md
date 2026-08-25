@@ -168,7 +168,7 @@ hybrid.py   RRF 融合
             score(d) = sum over channels of  1 / (RRF_K + rank_channel(d))
   |
   v
-rerank.py   对融合后 Top-M 候选重排，取 Top-N
+rerank.py   对融合后 Top-M 候选重排，取 Top-N；ONNX 会话按模型名进程内复用
   |
   v
 返回 RetrievalResult[]：{text, source, chunk_index, score, channel}
@@ -184,7 +184,7 @@ rerank.py   对融合后 Top-M 候选重排，取 Top-N
 | `vectorstore.py` | 向量库封装 | 只暴露 `add` / `query` / `count`，屏蔽 Chroma 细节，便于替换 |
 | `bm25.py` | 关键词检索 | jieba 精确模式分词；索引与向量库共享同一份 chunk id |
 | `hybrid.py` | 融合 | RRF，不做分数归一化 |
-| `rerank.py` | 重排 | ONNX cross-encoder / LLM / none 可切换；失败退回 RRF 顺序 |
+| `rerank.py` | 重排 | ONNX cross-encoder / LLM / none 可切换；ONNX 会话按模型名缓存，失败退回 RRF 顺序 |
 | `pipeline.py` | 对外入口 | `build_index(dir)` 与 `search(query, top_n)` |
 | `index_cli.py` | 建库命令行 | `python -m rag.index_cli --dir data/kb` |
 
@@ -193,6 +193,21 @@ rerank.py   对融合后 Top-M 候选重排，取 Top-N
 > **为什么 embedding 后端要可插拔**：一是测试需要确定性、零网络依赖的假实现；二是本地 ONNX 模型与远程 API 各有适用场景（离线 vs 无本地算力），抽象一层可在不改业务代码的前提下切换；三是评测时需要对比不同 embedding 的召回差异。
 
 > **为什么索引产物不进入 Git**：`data/kb/` 是可审查的源语料，需要版本管理；`data/chroma/` 与 `data/bm25/` 是由配置和语料重建出的运行时产物，提交它们会放大仓库、制造平台兼容问题，并可能与当前 embedding 模型不一致。
+
+> **为什么缓存 ONNX reranker 会话**：cross-encoder 的模型加载和 ONNX Session 初始化远重于一次 Top-20 推理。产品查询与 Phase 13 批量评测都通过同一个 `rag/rerank.py` 入口，因此按模型名做进程内缓存可以避免逐 query 重载；它不缓存 query、候选或分数，不改变排序语义。
+
+#### Phase 13 检索评测边界
+
+`eval/retrieval_runner.py` 直接复用上述检索原语，但使用 `eval/.cache/` 下的独立索引，既不读写产品索引，也不触发 LLM、Web 或 fallback。四组定义为：
+
+```text
+R1 = vector Top20               -> Top5
+R2 = BM25 Top20                 -> Top5
+R3 = vector + BM25 -> RRF Top20 -> Top5
+R4 = 与 R3 完全相同的 Top20     -> ONNX rerank -> Top5
+```
+
+Candidate Recall@20 使用候选集合，Hit@5 / MRR@5 使用最终集合。R3 与 R4 逐题共享候选，确保两组差异只来自 rerank。
 
 ---
 
@@ -262,6 +277,21 @@ START -> planner -> researcher -> [should_continue] --+--> critic
                             （质量不足且未超上限时回退）
 ```
 
+#### Phase 13 P/Q 评测图
+
+`eval/orchestration_runner.py` 仍通过 `build_graph()` 构建同一套 LangGraph 拓扑，不用 if-else 绕开图：
+
+```text
+P1: fixed planner -> researcher(concurrency=1) -> skipped critic -> writer
+P2: fixed planner -> researcher(concurrency=3) -> skipped critic -> writer
+Q1: fixed planner -> researcher(concurrency=3) -> skipped critic -> writer
+Q2: fixed planner -> researcher(concurrency=3) <-> real critic -> writer
+```
+
+fixed planner 直接返回题集冻结的子问题，消除 Planner 随机性与一次 LLM 调用；“关闭 Critic”通过注入一个有 trace 的 skipped node 实现，图拓扑不变。Researcher 增加可选 `Settings` 与 Web searcher 注入口，生产调用不传参数时仍读取集中配置并使用真实 `web_search`；评测调用注入 query cache，并让 cache miss / 损坏作为 fatal error 退出。
+
+P/Q raw 每题完成后立即追加并 `fsync`，续跑键为 `case_id + group + round`。真实执行还必须显式提供 `--live` 与 `--max-tasks`；这些是付费/联网评测的安全门，不影响普通离线测试。
+
 两个条件函数：
 
 | 函数 | 位置 | 判断逻辑 |
@@ -286,11 +316,17 @@ START -> planner -> researcher -> [should_continue] --+--> critic
 #### `agents/researcher.py`（改造要点）
 
 ```python
-async def researcher_node(state, *, writer: StreamWriter) -> dict:
-    settings = get_settings()
+async def researcher_node(
+    state,
+    *,
+    writer: StreamWriter,
+    settings: Settings | None = None,
+    web_searcher: WebSearcher | None = None,
+) -> dict:
+    current = settings or get_settings()
     system_prompt = load_prompt("researcher_system")
-    timeout_seconds = settings.llm_timeout + settings.embedding_timeout + 30.0
-    semaphore = asyncio.Semaphore(settings.research_concurrency)
+    timeout_seconds = current.llm_timeout + current.embedding_timeout + 30.0
+    semaphore = asyncio.Semaphore(current.research_concurrency)
     targets = state["missing_aspects"] or state["sub_questions"]   # 返工时只查缺口
     results = await asyncio.gather(
         *(
@@ -300,8 +336,9 @@ async def researcher_node(state, *, writer: StreamWriter) -> dict:
                 timeout_seconds=timeout_seconds,
                 system_prompt=system_prompt,
                 trace_id=state["trace_id"],
-                settings=settings,
+                settings=current,
                 stream_writer=writer,
+                web_searcher=web_searcher or web_search,
             )
             for q in targets
         ),

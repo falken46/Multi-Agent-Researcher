@@ -19,6 +19,8 @@ def test_rrf_fuses_rankings_and_deduplicates_shared_chunks() -> None:
     ]
     assert fused[0].score == pytest.approx(1 / 61 + 1 / 62)
     assert fused[0].channel == "bm25+vector"
+    assert fused[0].score_kind == "rrf"
+    assert fused[0].fallback_confidence == pytest.approx(0.8)
 
 
 def _result(chunk_id: str, channel: str) -> RetrievalResult:
@@ -29,4 +31,6 @@ def _result(chunk_id: str, channel: str) -> RetrievalResult:
         chunk_index=0,
         score=1.0,
         channel=channel,
+        fallback_confidence=0.8 if channel == "vector" else None,
+        score_kind="cosine_similarity" if channel == "vector" else "bm25",
     )

@@ -67,15 +67,18 @@ class ChromaVectorStore:
         ):
             metadata = _sanitize_metadata(raw_metadata or {})
             distance = float(raw_distance)
+            similarity = max(0.0, min(1.0, 1.0 - distance))
             results.append(
                 RetrievalResult(
                     chunk_id=str(chunk_id),
                     text=str(text or ""),
                     source=str(metadata.get("source_path", "unknown")),
                     chunk_index=int(metadata.get("chunk_index", 0)),
-                    score=max(0.0, min(1.0, 1.0 - distance)),
+                    score=similarity,
                     channel="vector",
                     metadata=metadata,
+                    fallback_confidence=similarity,
+                    score_kind="cosine_similarity",
                 )
             )
         return results
