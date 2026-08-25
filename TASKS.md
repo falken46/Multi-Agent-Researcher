@@ -49,18 +49,18 @@
 
 > 目标：补齐"自建检索层"这一最大能力缺口。本 Phase 是整个 v2 的技术核心。
 
-- [ ] T11.1 `rag/loader.py`：`.md` / `.txt` / `.pdf` 解析，失败不中断建库
-- [ ] T11.2 `rag/splitter.py`：递归字符切分，中文标点优先，携带 chunk 元数据
-- [ ] T11.3 `rag/embeddings.py`：可插拔后端（`fastembed` / `remote` / `fake`）
-- [ ] T11.4 `rag/vectorstore.py`：Chroma 封装，只暴露 `add` / `query` / `count`
-- [ ] T11.5 `rag/bm25.py`：jieba 分词 + BM25 索引，与向量库共享 chunk id
-- [ ] T11.6 `rag/hybrid.py`：RRF 融合
-- [ ] T11.7 `rag/rerank.py`：ONNX cross-encoder 与 LLM rerank 两种实现，可切换
-- [ ] T11.8 `rag/pipeline.py`：`build_index()` 与 `search()` 统一入口
-- [ ] T11.9 `rag/index_cli.py`：命令行建库
-- [ ] T11.10 `tools/kb_search.py`：封装为工具，返回 `hits` 与 `max_score`
-- [ ] T11.11 准备知识库语料（`data/kb/`，20—40 篇技术文档）
-- [ ] T11.12 `tests/test_rag_*.py`：切分、融合、检索各一组测试（使用 `fake` embedding 后端保证确定性）
+- [x] T11.1 `rag/loader.py`：`.md` / `.txt` / `.pdf` 解析，失败不中断建库
+- [x] T11.2 `rag/splitter.py`：递归字符切分，中文标点优先，携带 chunk 元数据
+- [x] T11.3 `rag/embeddings.py`：可插拔后端（`fastembed` / `remote` / `fake`）
+- [x] T11.4 `rag/vectorstore.py`：Chroma 封装，只暴露 `add` / `query` / `count`
+- [x] T11.5 `rag/bm25.py`：jieba 分词 + BM25 索引，与向量库共享 chunk id
+- [x] T11.6 `rag/hybrid.py`：RRF 融合
+- [x] T11.7 `rag/rerank.py`：ONNX cross-encoder 与 LLM rerank 两种实现，可切换
+- [x] T11.8 `rag/pipeline.py`：`build_index()` 与 `search()` 统一入口
+- [x] T11.9 `rag/index_cli.py`：命令行建库
+- [x] T11.10 `tools/kb_search.py`：封装为工具，返回 `hits` 与 `max_score`
+- [x] T11.11 准备知识库语料（`data/kb/`，20—40 篇技术文档）
+- [x] T11.12 `tests/test_rag_*.py`：切分、融合、检索各一组测试（使用 `fake` embedding 后端保证确定性）
 
 **验收标准**
 

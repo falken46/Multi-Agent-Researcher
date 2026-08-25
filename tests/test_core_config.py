@@ -12,6 +12,10 @@ def test_settings_defaults_are_typed() -> None:
     assert settings.model_name == "deepseek-v4-flash"
     assert settings.llm_timeout == 60.0
     assert settings.max_retry == 2
+    assert settings.embedding_backend == "fastembed"
+    assert settings.chroma_collection == "deepresearch_kb"
+    assert settings.vector_search_enabled is True
+    assert settings.bm25_search_enabled is True
     assert Settings.model_fields["trace_enabled"].default is True
     assert settings.model_pricing["deepseek-v4-flash"].output == 2.0
 
