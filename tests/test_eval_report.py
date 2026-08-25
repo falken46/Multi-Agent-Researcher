@@ -59,6 +59,9 @@ def test_report_rejects_empty_or_invalid_summaries() -> None:
         candidate_recall_at_20=1.1,
         hit_at_5=1.0,
         mrr_at_5=1.0,
+        recall_at_5=1.0,
+        ndcg_at_5=1.0,
+        map_at_20=1.0,
     )
     with pytest.raises(ValueError, match="candidate_recall"):
         render_markdown_report(retrieval_summaries=[invalid])
@@ -91,11 +94,15 @@ def test_write_retrieval_report_from_raw_computes_deltas(
         "R4": ["noise", "gold"],
     }
     for group, retrieved in retrieved_by_group.items():
+        ranked = retrieved + [
+            chunk_id for chunk_id in ["gold", "noise"] if chunk_id not in retrieved
+        ]
         records.append(
             {
                 "case_id": "case-1",
                 "group": group,
                 "candidate_chunk_ids": ["gold", "noise"],
+                "ranked_chunk_ids": ranked,
                 "retrieved_chunk_ids": retrieved,
                 "gold_chunk_ids": ["gold"],
                 "dataset": "test-dataset",
@@ -122,6 +129,42 @@ def test_write_retrieval_report_from_raw_computes_deltas(
     assert "-0.5000" in content
     assert "负向结果同样保留" in content
     assert "fake-reranker" in content
+
+
+def test_retrieval_report_rejects_raw_without_full_ranked_list(
+    runtime_dir: Path,
+) -> None:
+    """Legacy raw only stored the final slice, so MAP@20 would silently be AP@5."""
+
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = runtime_dir / "legacy.jsonl"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "case_id": "case-1",
+                "group": "R4",
+                "candidate_chunk_ids": ["gold", "noise"],
+                "retrieved_chunk_ids": ["gold"],
+                "gold_chunk_ids": ["gold"],
+                "dataset": "test-dataset",
+                "candidate_k": 20,
+                "final_k": 5,
+                "embedding_backend": "fake",
+                "embedding_model": "fake-model",
+                "rrf_k": 60,
+                "rerank_backend": "onnx",
+                "rerank_model": "fake-reranker",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="ranked_chunk_ids"):
+        write_retrieval_report_from_raw(
+            runtime_dir / "report.md",
+            raw_paths=[raw_path],
+        )
 
 
 def test_combined_report_reads_task_metrics_only_from_raw_trace_summary(
@@ -168,6 +211,9 @@ def _retrieval_summary() -> RetrievalGroupSummary:
         candidate_recall_at_20=0.75,
         hit_at_5=0.8,
         mrr_at_5=0.625,
+        recall_at_5=0.7,
+        ndcg_at_5=0.66,
+        map_at_20=0.58,
     )
 
 

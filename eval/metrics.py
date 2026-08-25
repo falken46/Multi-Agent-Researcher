@@ -25,6 +25,26 @@ from eval.models import (
 _CITATION_PATTERN = re.compile(r"\[(\d+)\](?!\s*:)")
 
 
+def recall_at_k(
+    retrieved_chunk_ids: Sequence[str],
+    gold_chunk_ids: Sequence[str],
+    *,
+    k: int,
+) -> float:
+    """Return the fraction of distinct gold chunks present in top ``k``.
+
+    Unlike :func:`hit_at_k`, which saturates as soon as one gold chunk
+    appears, this rewards retrieving *several* relevant passages.  On a
+    multi-positive dataset that is the behaviour a reranker is expected to
+    change, so recall is reported alongside the first-hit metrics.
+    """
+
+    ranked = _ranked_unique(retrieved_chunk_ids)
+    gold = _gold_set(gold_chunk_ids)
+    _require_positive_k(k)
+    return len(gold.intersection(ranked[:k])) / len(gold)
+
+
 def candidate_recall_at_k(
     retrieved_chunk_ids: Sequence[str],
     gold_chunk_ids: Sequence[str],
@@ -33,10 +53,59 @@ def candidate_recall_at_k(
 ) -> float:
     """Return the fraction of distinct gold chunks present in top ``k``."""
 
+    return recall_at_k(retrieved_chunk_ids, gold_chunk_ids, k=k)
+
+
+def ndcg_at_k(
+    retrieved_chunk_ids: Sequence[str],
+    gold_chunk_ids: Sequence[str],
+    *,
+    k: int,
+) -> float:
+    """Return binary-gain nDCG at ``k``.
+
+    Gains are binary because the frozen qrels only mark a passage relevant
+    or not; no graded judgements are available.  The ideal ranking places
+    ``min(len(gold), k)`` relevant passages first.
+    """
+
     ranked = _ranked_unique(retrieved_chunk_ids)
     gold = _gold_set(gold_chunk_ids)
     _require_positive_k(k)
-    return len(gold.intersection(ranked[:k])) / len(gold)
+    gain = sum(
+        1.0 / math.log2(rank + 1)
+        for rank, chunk_id in enumerate(ranked[:k], start=1)
+        if chunk_id in gold
+    )
+    ideal = sum(
+        1.0 / math.log2(rank + 1) for rank in range(1, min(len(gold), k) + 1)
+    )
+    return gain / ideal
+
+
+def average_precision_at_k(
+    retrieved_chunk_ids: Sequence[str],
+    gold_chunk_ids: Sequence[str],
+    *,
+    k: int,
+) -> float:
+    """Return average precision at ``k``, normalised by ``min(len(gold), k)``.
+
+    Averaging this across queries yields MAP@k, the metric the source
+    reranking benchmark is scored with.  The truncated normaliser is used
+    so a query with more gold passages than ``k`` can still reach 1.0.
+    """
+
+    ranked = _ranked_unique(retrieved_chunk_ids)
+    gold = _gold_set(gold_chunk_ids)
+    _require_positive_k(k)
+    hits = 0
+    precision_sum = 0.0
+    for rank, chunk_id in enumerate(ranked[:k], start=1):
+        if chunk_id in gold:
+            hits += 1
+            precision_sum += hits / rank
+    return precision_sum / min(len(gold), k)
 
 
 def hit_at_k(
@@ -91,12 +160,34 @@ def mrr_at_5(
     return mrr_at_k(retrieved_chunk_ids, gold_chunk_ids, k=5)
 
 
+def recall_at_5(
+    retrieved_chunk_ids: Sequence[str],
+    gold_chunk_ids: Sequence[str],
+) -> float:
+    return recall_at_k(retrieved_chunk_ids, gold_chunk_ids, k=5)
+
+
+def ndcg_at_5(
+    retrieved_chunk_ids: Sequence[str],
+    gold_chunk_ids: Sequence[str],
+) -> float:
+    return ndcg_at_k(retrieved_chunk_ids, gold_chunk_ids, k=5)
+
+
+def average_precision_at_20(
+    retrieved_chunk_ids: Sequence[str],
+    gold_chunk_ids: Sequence[str],
+) -> float:
+    return average_precision_at_k(retrieved_chunk_ids, gold_chunk_ids, k=20)
+
+
 def evaluate_retrieval_case(
     case: RetrievalObservation | Mapping[str, Any],
 ) -> RetrievalCaseMetrics:
     """Evaluate one canonical R-track raw observation."""
 
     observation = _retrieval_observation(case)
+    ranking = observation.ranking_chunk_ids
     return RetrievalCaseMetrics(
         case_id=observation.case_id,
         group=observation.group,
@@ -113,6 +204,9 @@ def evaluate_retrieval_case(
             observation.retrieved_chunk_ids,
             observation.gold_chunk_ids,
         ),
+        recall_at_5=recall_at_5(ranking, observation.gold_chunk_ids),
+        ndcg_at_5=ndcg_at_5(ranking, observation.gold_chunk_ids),
+        map_at_20=average_precision_at_20(ranking, observation.gold_chunk_ids),
     )
 
 
@@ -138,6 +232,9 @@ def aggregate_retrieval_group(
         ),
         hit_at_5=fmean(item.hit_at_5 for item in metrics),
         mrr_at_5=fmean(item.mrr_at_5 for item in metrics),
+        recall_at_5=fmean(item.recall_at_5 for item in metrics),
+        ndcg_at_5=fmean(item.ndcg_at_5 for item in metrics),
+        map_at_20=fmean(item.map_at_20 for item in metrics),
     )
 
 
@@ -432,6 +529,8 @@ __all__ = [
     "aggregate_retrieval_records",
     "aggregate_task_group",
     "aggregate_task_records",
+    "average_precision_at_20",
+    "average_precision_at_k",
     "candidate_recall_at_20",
     "candidate_recall_at_k",
     "citation_validity_score",
@@ -444,4 +543,8 @@ __all__ = [
     "hit_at_k",
     "mrr_at_5",
     "mrr_at_k",
+    "ndcg_at_5",
+    "ndcg_at_k",
+    "recall_at_5",
+    "recall_at_k",
 ]

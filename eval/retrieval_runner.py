@@ -209,16 +209,16 @@ def _evaluate_case(
     for group in groups:
         if group == "R1":
             candidates = channel_results["vector"]
-            retrieved = candidates[:FINAL_K]
+            ranked = candidates
             latency_ms = channel_latency_ms["vector"]
         elif group == "R2":
             candidates = channel_results["bm25"]
-            retrieved = candidates[:FINAL_K]
+            ranked = candidates
             latency_ms = channel_latency_ms["bm25"]
         elif group == "R3":
             assert fused is not None
             candidates = fused
-            retrieved = candidates[:FINAL_K]
+            ranked = candidates
             latency_ms = (
                 channel_latency_ms["vector"]
                 + channel_latency_ms["bm25"]
@@ -228,10 +228,13 @@ def _evaluate_case(
             assert fused is not None
             candidates = fused
             started = perf_counter()
-            retrieved = rerank(
+            # Rerank at candidate depth so rank-aware metrics (MAP@20) have a
+            # full ordering.  ``rerank`` sorts then slices, so the top ``FINAL_K``
+            # is identical to reranking with ``top_n=FINAL_K`` directly.
+            ranked = rerank(
                 case.query,
                 candidates,
-                top_n=FINAL_K,
+                top_n=CANDIDATE_K,
                 settings=settings,
             )
             latency_ms = (
@@ -245,7 +248,8 @@ def _evaluate_case(
                 case,
                 group=group,
                 candidates=candidates,
-                retrieved=retrieved,
+                ranked=ranked,
+                retrieved=ranked[:FINAL_K],
                 latency_ms=latency_ms,
                 settings=settings,
             )
@@ -258,12 +262,13 @@ def _raw_record(
     *,
     group: RetrievalGroup,
     candidates: Sequence[RetrievalResult],
+    ranked: Sequence[RetrievalResult],
     retrieved: Sequence[RetrievalResult],
     latency_ms: float,
     settings: Settings,
 ) -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "track": "R",
         "dataset": DATASET_NAME,
         "case_id": case.case_id,
@@ -273,6 +278,7 @@ def _raw_record(
         "candidate_k": CANDIDATE_K,
         "final_k": FINAL_K,
         "candidate_chunk_ids": [item.chunk_id for item in candidates],
+        "ranked_chunk_ids": [item.chunk_id for item in ranked],
         "retrieved_chunk_ids": [item.chunk_id for item in retrieved],
         "gold_chunk_ids": list(case.gold_passage_ids),
         "source_candidate_chunk_ids": list(case.source_candidate_passage_ids),

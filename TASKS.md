@@ -106,19 +106,33 @@
 - [x] T13.1 接入公开 `C-MTEB/T2Reranking` 检索集，并构造 15 题端到端编排集
 - [x] T13.2 用公开 positive / hard negative / qrels 生成共享 passage 池，替代人工 gold 标注
 - [x] T13.3 `eval/metrics.py`：Candidate Recall@20、Hit@5、MRR@5、引用有效性、任务完成率及 trace 成本/耗时/行为指标
+- [x] T13.3b 补多正例排序指标：Recall@5、nDCG@5、MAP@20（见下方「指标口径修订」）
 - [x] T13.4a `eval/retrieval_runner.py`：共享索引运行 R1—R4，输出候选 / Top5 / gold 结构化 raw
 - [x] T13.4b `eval/orchestration_runner.py`：固定 Planner、query cache、P1/P2 与 Q1/Q2 编排对照
+- [x] T13.4c runner 在候选深度重排并落 `ranked_chunk_ids`（schema_version 2），使深层指标可算
 - [x] T13.5a `eval/report.py`：从 R 轨 raw 重算指标并生成 Markdown 对照表
 - [x] T13.5b 报告生成器接入 P/Q raw + trace 汇总与组间差值
+- [x] T13.5c 报告对缺 `ranked_chunk_ids` 的旧 raw fail-fast，杜绝浅层数字冒充 MAP@20
 - [x] T13.6a 跑完 100 题 R1—R4，产出 400 条真实检索观测
 - [ ] T13.6b 跑完 P1/P2 并行微基准与 Q1/Q2 Critic 对照，产出真实编排数据
 - [x] T13.7a 把 R 轨关键数字回填到 `README.md` 与 `RESUME_MAPPING.md`
 - [ ] T13.7b P/Q 轨完成后回填耗时、成本、覆盖与引用数字
 
+### 指标口径修订（2026-08-26）
+
+首版 R 轨只有 Candidate Recall@20 / Hit@5 / MRR@5，三者都是「任一命中」或「首个命中」型指标。
+但 `eval/dataset/t2_reranking/metadata.json` 显示 100 个 query 共 755 条 positive 关系，
+**平均每 query 7.55 个正例**：此时 Hit@5 在 93—96% 已接近饱和，MRR@5 只反映第一个正例的位置，
+而 reranker 的实际工作是把全部正例顶到负例之上——原有指标看不见这件事。
+T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正例数据集。
+
+因此追加 Recall@5、nDCG@5、MAP@20 三项，并据此重判 rerank 结论。
+
 **验收标准**
 
 - 四组实验数据完整，每组指标可复现
 - 每一项优化（混合检索 / 重排 / 并行 / 反思）都有独立归因的数字
+- 深层指标必须来自含 `ranked_chunk_ids` 的 raw；旧格式一律 fail-fast
 - **红线**：报告中不出现任何未实际跑出的估计值
 
 ---

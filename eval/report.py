@@ -63,6 +63,12 @@ def render_markdown_report(
             "",
             "## 指标边界",
             "",
+            "- 该检索集平均每个 query 含多个正例，Hit@5 与 MRR@5 只反映"
+            "「首个正例的位置」，会较早饱和；Recall@5、nDCG@5 与 MAP@20 才度量"
+            "「多个正例整体排得好不好」，也是源基准的官方口径。",
+            "- MAP@20 的 AP 以 min(正例数, 20) 归一化，使正例数超过截断深度的"
+            " query 仍可取到 1.0，避免组间比较被各 query 的正例数量分布带偏。",
+            "- nDCG@5 使用二值增益：冻结的 qrels 只标注相关与否，没有分级判断。",
             "- Coverage 是 Unicode/空白归一化后的关键词或同义短语覆盖率，不代表语义正确性。",
             "- Citation validity 只验证报告中的数字引用编号是否存在于输入引用集合，不证明来源支持对应结论。",
             "- token、成本、调用次数、fallback、revision 与耗时均来自结构化 trace summary，不从普通日志提取。",
@@ -175,6 +181,7 @@ def write_report_from_raw(
     }
     if retrieval_raw_paths:
         retrieval_records = load_jsonl_records(retrieval_raw_paths)
+        _require_ranked_depth(retrieval_records)
         retrieval_observations = tuple(
             RetrievalObservation.from_raw(item) for item in retrieval_records
         )
@@ -221,8 +228,8 @@ def _render_retrieval_table(
         "",
         "## R 轨：检索质量",
         "",
-        "| 组 | 题目数 | 观测数 | Candidate Recall@20 | Hit@5 | MRR@5 |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| 组 | 题目数 | 观测数 | Candidate Recall@20 | Hit@5 | MRR@5 | Recall@5 | nDCG@5 | MAP@20 |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for summary in sorted(summaries, key=lambda item: item.group):
         lines.append(
@@ -235,6 +242,9 @@ def _render_retrieval_table(
                     _percentage(summary.candidate_recall_at_20),
                     _percentage(summary.hit_at_5),
                     f"{summary.mrr_at_5:.4f}",
+                    _percentage(summary.recall_at_5),
+                    f"{summary.ndcg_at_5:.4f}",
+                    f"{summary.map_at_20:.4f}",
                 ]
             )
             + " |"
@@ -259,15 +269,26 @@ def _render_retrieval_attribution(
         "- R3 相较 R1："
         f"Candidate Recall@20 {_signed_pp(r3.candidate_recall_at_20 - r1.candidate_recall_at_20)}，"
         f"Hit@5 {_signed_pp(r3.hit_at_5 - r1.hit_at_5)}，"
-        f"MRR@5 {_signed_decimal(r3.mrr_at_5 - r1.mrr_at_5)}。",
+        f"MRR@5 {_signed_decimal(r3.mrr_at_5 - r1.mrr_at_5)}，"
+        f"Recall@5 {_signed_pp(r3.recall_at_5 - r1.recall_at_5)}，"
+        f"nDCG@5 {_signed_decimal(r3.ndcg_at_5 - r1.ndcg_at_5)}，"
+        f"MAP@20 {_signed_decimal(r3.map_at_20 - r1.map_at_20)}。",
         "- R3 相较 R2："
         f"Candidate Recall@20 {_signed_pp(r3.candidate_recall_at_20 - r2.candidate_recall_at_20)}，"
         f"Hit@5 {_signed_pp(r3.hit_at_5 - r2.hit_at_5)}，"
-        f"MRR@5 {_signed_decimal(r3.mrr_at_5 - r2.mrr_at_5)}。",
+        f"MRR@5 {_signed_decimal(r3.mrr_at_5 - r2.mrr_at_5)}，"
+        f"Recall@5 {_signed_pp(r3.recall_at_5 - r2.recall_at_5)}，"
+        f"nDCG@5 {_signed_decimal(r3.ndcg_at_5 - r2.ndcg_at_5)}，"
+        f"MAP@20 {_signed_decimal(r3.map_at_20 - r2.map_at_20)}。",
         "- R4 相较 R3："
         f"Candidate Recall@20 {_signed_pp(r4.candidate_recall_at_20 - r3.candidate_recall_at_20)}，"
         f"Hit@5 {_signed_pp(r4.hit_at_5 - r3.hit_at_5)}，"
-        f"MRR@5 {_signed_decimal(r4.mrr_at_5 - r3.mrr_at_5)}。",
+        f"MRR@5 {_signed_decimal(r4.mrr_at_5 - r3.mrr_at_5)}，"
+        f"Recall@5 {_signed_pp(r4.recall_at_5 - r3.recall_at_5)}，"
+        f"nDCG@5 {_signed_decimal(r4.ndcg_at_5 - r3.ndcg_at_5)}，"
+        f"MAP@20 {_signed_decimal(r4.map_at_20 - r3.map_at_20)}。",
+        "- R4 只重排 R3 的同一候选集，因此 Candidate Recall@20 必然不变；"
+        "重排效果应主要看 Recall@5、nDCG@5 与 MAP@20，而非首命中型的 Hit@5。",
         "- 上述差值是当前固定子集上的描述性结果，不代表统计显著性；负向结果同样保留。",
     ]
 
@@ -360,6 +381,9 @@ def _validate_retrieval_summary(summary: RetrievalGroupSummary) -> None:
     )
     _validate_unit_interval("hit_at_5", summary.hit_at_5)
     _validate_unit_interval("mrr_at_5", summary.mrr_at_5)
+    _validate_unit_interval("recall_at_5", summary.recall_at_5)
+    _validate_unit_interval("ndcg_at_5", summary.ndcg_at_5)
+    _validate_unit_interval("map_at_20", summary.map_at_20)
 
 
 def _validate_task_summary(summary: TaskGroupSummary) -> None:
@@ -505,6 +529,29 @@ def _single_value(records: Sequence[Mapping[str, Any]], name: str) -> Any:
     if len(values) != 1:
         raise ValueError(f"raw records mix {name} values")
     return values[0]
+
+
+def _require_ranked_depth(records: Sequence[Mapping[str, Any]]) -> None:
+    """拒绝用被截断的 raw 计算深层指标。
+
+    ``ranked_chunk_ids`` 自 schema_version 2 起才落盘；更早的记录只保存了
+    最终 top-``final_k`` 切片，用它算出的 MAP@20 实际是 AP@final_k。
+    把那个数字挂在 MAP@20 抬头下，等于发布一个实验从未产出过的结果。
+    """
+
+    missing = sorted(
+        {
+            _required_record_text(record, "group")
+            for record in records
+            if not record.get("ranked_chunk_ids")
+        }
+    )
+    if missing:
+        raise ValueError(
+            "raw records lack ranked_chunk_ids for groups "
+            f"{', '.join(missing)}; MAP@20 requires the full ranked list, "
+            "so re-run the R track with the current runner before reporting"
+        )
 
 
 def _required_record_text(record: Mapping[str, Any], name: str) -> str:

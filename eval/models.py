@@ -70,6 +70,7 @@ class RetrievalObservation:
     retrieved_chunk_ids: tuple[str, ...]
     gold_chunk_ids: tuple[str, ...]
     round_index: int = 1
+    ranked_chunk_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _require_text("case_id", self.case_id)
@@ -86,6 +87,29 @@ class RetrievalObservation:
             self.gold_chunk_ids,
             allow_empty=False,
         )
+        _require_id_sequence("ranked_chunk_ids", self.ranked_chunk_ids)
+        if self.ranked_chunk_ids:
+            if not set(self.ranked_chunk_ids).issubset(self.candidate_chunk_ids):
+                raise ValueError(
+                    "ranked_chunk_ids must be a subset of candidate_chunk_ids"
+                )
+            prefix = self.ranked_chunk_ids[: len(self.retrieved_chunk_ids)]
+            if prefix != self.retrieved_chunk_ids:
+                raise ValueError(
+                    "retrieved_chunk_ids must be a prefix of ranked_chunk_ids"
+                )
+
+    @property
+    def ranking_chunk_ids(self) -> tuple[str, ...]:
+        """Return the deepest ranked list available for rank-aware metrics.
+
+        Older raw records only persisted the final top-``k`` slice, so they
+        fall back to ``retrieved_chunk_ids``.  Metrics computed at a cutoff
+        deeper than that slice are only meaningful once the runner emits
+        ``ranked_chunk_ids``.
+        """
+
+        return self.ranked_chunk_ids or self.retrieved_chunk_ids
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, Any]) -> RetrievalObservation:
@@ -98,6 +122,11 @@ class RetrievalObservation:
             retrieved_chunk_ids=_id_tuple(raw, "retrieved_chunk_ids"),
             gold_chunk_ids=_id_tuple(raw, "gold_chunk_ids", allow_empty=False),
             round_index=_optional_positive_int(raw, "round_index", default=1),
+            ranked_chunk_ids=(
+                _id_tuple(raw, "ranked_chunk_ids")
+                if "ranked_chunk_ids" in raw
+                else ()
+            ),
         )
 
 
@@ -165,6 +194,9 @@ class RetrievalCaseMetrics:
     candidate_recall_at_20: float
     hit_at_5: float
     mrr_at_5: float
+    recall_at_5: float
+    ndcg_at_5: float
+    map_at_20: float
 
 
 @dataclass(frozen=True)
@@ -177,6 +209,9 @@ class RetrievalGroupSummary:
     candidate_recall_at_20: float
     hit_at_5: float
     mrr_at_5: float
+    recall_at_5: float
+    ndcg_at_5: float
+    map_at_20: float
 
 
 @dataclass(frozen=True)

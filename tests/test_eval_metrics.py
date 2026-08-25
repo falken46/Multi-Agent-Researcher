@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from eval.metrics import (
     aggregate_retrieval_group,
     aggregate_retrieval_records,
     aggregate_task_group,
+    average_precision_at_20,
+    average_precision_at_k,
     candidate_recall_at_20,
     candidate_recall_at_k,
     citation_validity_score,
@@ -16,7 +20,10 @@ from eval.metrics import (
     extract_citation_ids,
     hit_at_5,
     mrr_at_5,
+    ndcg_at_5,
+    recall_at_5,
 )
+from eval.models import RetrievalObservation
 
 
 def test_retrieval_metrics_use_candidate_and_top_five_cutoffs() -> None:
@@ -66,6 +73,67 @@ def test_retrieval_case_and_group_accept_structured_raw_records() -> None:
     assert summary.hit_at_5 == 1.0
     assert summary.mrr_at_5 == pytest.approx(0.75)
     assert all_summaries == (summary,)
+
+
+def test_recall_and_ndcg_separate_multi_positive_ranking_from_first_hit() -> None:
+    ranked = ("gold-a", "noise-1", "gold-b", "noise-2", "noise-3")
+    gold = ("gold-a", "gold-b", "gold-c")
+
+    # hit_at_5 saturates on the first relevant passage and cannot distinguish
+    # a ranking that surfaces one gold chunk from one that surfaces two.
+    assert hit_at_5(ranked, gold) == 1.0
+    assert recall_at_5(ranked, gold) == pytest.approx(2 / 3)
+
+    gain = 1 / math.log2(2) + 1 / math.log2(4)
+    ideal = 1 / math.log2(2) + 1 / math.log2(3) + 1 / math.log2(4)
+    assert ndcg_at_5(ranked, gold) == pytest.approx(gain / ideal)
+
+
+def test_average_precision_normalises_by_truncated_gold_count() -> None:
+    ranked = ("gold-a", "noise", "gold-b")
+    gold = ("gold-a", "gold-b")
+
+    assert average_precision_at_20(ranked, gold) == pytest.approx((1.0 + 2 / 3) / 2)
+
+    # A query holding more gold chunks than the cutoff can still reach 1.0.
+    assert average_precision_at_k(("g1", "g2"), ("g1", "g2", "g3"), k=2) == 1.0
+
+
+def test_ranked_chunk_ids_drive_rank_aware_metrics_and_must_extend_retrieved() -> None:
+    raw = {
+        "id": "RET-001",
+        "group": "R4",
+        "candidate_chunk_ids": ["a", "b", "c", "d"],
+        "ranked_chunk_ids": ["c", "a", "d", "b"],
+        "retrieved_chunk_ids": ["c", "a"],
+        "gold_chunk_ids": ["a", "d"],
+    }
+
+    metrics = evaluate_retrieval_case(raw)
+
+    # MAP@20 sees the full reranked ordering, including the gold chunk at rank 3
+    # that the persisted top-2 slice alone would have hidden.
+    assert metrics.recall_at_5 == pytest.approx(1.0)
+    assert metrics.map_at_20 == pytest.approx((1 / 2 + 2 / 3) / 2)
+
+    with pytest.raises(ValueError, match="prefix"):
+        RetrievalObservation.from_raw({**raw, "retrieved_chunk_ids": ["a", "c"]})
+
+
+def test_rank_aware_metrics_fall_back_to_retrieved_ids_for_legacy_raw() -> None:
+    legacy = {
+        "id": "RET-002",
+        "group": "R3",
+        "candidate_chunk_ids": ["a", "b", "c"],
+        "retrieved_chunk_ids": ["b", "a"],
+        "gold_chunk_ids": ["a"],
+    }
+
+    observation = RetrievalObservation.from_raw(legacy)
+
+    assert observation.ranked_chunk_ids == ()
+    assert observation.ranking_chunk_ids == ("b", "a")
+    assert evaluate_retrieval_case(legacy).map_at_20 == pytest.approx(0.5)
 
 
 def test_retrieval_raw_requires_final_results_to_come_from_candidates() -> None:
