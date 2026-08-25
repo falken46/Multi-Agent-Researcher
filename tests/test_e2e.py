@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from agents.graph import build_graph
 from agents.state import ResearchState
 from backend.streaming import stream_research_progress
 from frontend.app import apply_event_to_view_state, create_view_state, parse_sse_lines
 
 
-def test_mock_research_flow_streams_into_frontend_state() -> None:
+@pytest.mark.asyncio
+async def test_mock_research_flow_streams_into_frontend_state() -> None:
     def planner(state: ResearchState) -> dict[str, object]:
         assert state["topic"] == "AI Agent 岗位需求趋势"
         return {
@@ -26,6 +29,15 @@ def test_mock_research_flow_streams_into_frontend_state() -> None:
                 for question in state["sub_questions"]
             },
             "errors": [],
+        }
+
+    def critic(state: ResearchState) -> dict[str, object]:
+        assert len(state["research_results"]) == 3
+        return {
+            "quality_score": 0.9,
+            "quality_history": [0.9],
+            "critique": "资料充分。",
+            "missing_aspects": [],
         }
 
     def writer(state: ResearchState) -> dict[str, object]:
@@ -47,15 +59,17 @@ def test_mock_research_flow_streams_into_frontend_state() -> None:
     compiled_graph = build_graph(
         planner=planner,
         researcher=researcher,
+        critic=critic,
         writer=writer,
     )
 
-    raw_sse_events = list(
-        stream_research_progress(
+    raw_sse_events = [
+        event
+        async for event in stream_research_progress(
             "AI Agent 岗位需求趋势",
             compiled_graph=compiled_graph,
         )
-    )
+    ]
     frontend_events = list(parse_sse_lines(_to_sse_lines(raw_sse_events)))
     view_state = create_view_state()
     for event in frontend_events:
@@ -66,15 +80,19 @@ def test_mock_research_flow_streams_into_frontend_state() -> None:
         "progress",
         "progress",
         "progress",
+        "progress",
+        "usage",
         "complete",
     ]
-    assert [event["data"]["node"] for event in frontend_events[1:4]] == [
+    assert [event["data"]["node"] for event in frontend_events[1:5]] == [
         "planner",
         "researcher",
+        "critic",
         "writer",
     ]
     assert view_state["agent_status"]["planner"]["status"] == "完成"
     assert view_state["agent_status"]["researcher"]["status"] == "完成"
+    assert view_state["agent_status"]["critic"]["status"] == "完成"
     assert view_state["agent_status"]["writer"]["status"] == "完成"
     assert len(view_state["sub_questions"]) == 3
     assert view_state["research_result_count"] == 3

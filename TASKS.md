@@ -11,7 +11,7 @@
 |-------|------|--------|------|
 | 10 | 基础设施层（config / llm / trace / costs） | M1 | 🟨 待验收 |
 | 11 | RAG 检索层 | M1 | ⬜ |
-| 12 | Agent 编排升级（Critic / 并行 / Checkpoint） | M1 | ⬜ |
+| 12 | Agent 编排升级（Critic / 并行 / Checkpoint） | M1 | 🟨 待验收 |
 | 13 | 评测体系 | M2 | ⬜ |
 | 14 | MCP Server | M3 | ⬜ |
 | 15 | 工程化（Docker / CI） | M2 | ⬜ |
@@ -75,25 +75,25 @@
 
 > 目标：把线性流程升级为带反思回环的并行状态机。
 
-- [ ] T12.1 `agents/state.py` 扩展：citations / critique / quality_score / missing_aspects / revision_count / trace_id / usage
-- [ ] T12.2 `prompts/critic_system.md`：含明确评分锚点与 JSON schema 说明
-- [ ] T12.3 `agents/critic.py`：结构化输出 + 解析失败降级
-- [ ] T12.4 `agents/researcher.py` 异步化：`asyncio.gather` + `Semaphore` + `return_exceptions=True`
-- [ ] T12.5 Researcher 双通道：`kb_search` 优先，`max_score` 低于阈值降级 `web_search`，降级事件写 trace
-- [ ] T12.6 Researcher 返工模式：`missing_aspects` 非空时只查缺口
-- [ ] T12.7 `agents/graph.py`：新增 critic 节点与 `should_revise` 条件边
-- [ ] T12.8 防死循环三重保险（硬上限 / 定向补查 / 分数无提升即退出）
-- [ ] T12.9 接入 SqliteSaver Checkpointer
-- [ ] T12.10 `backend/api.py` 扩展 SSE 事件类型
-- [ ] T12.11 `frontend/app.py` 展示反思过程与 usage
-- [ ] T12.12 `tests/test_critic.py`、`tests/test_graph_revision.py`（mock LLM，验证回环与上限）
+- [x] T12.1 `agents/state.py` 扩展：citations / critique / quality_score / quality_history / missing_aspects / revision_count / trace_id / Usage / fallback_queries
+- [x] T12.2 `prompts/critic_system.md`：含明确评分锚点与 JSON schema 说明
+- [x] T12.3 `agents/critic.py`：结构化输出 + 解析失败降级
+- [x] T12.4 `agents/researcher.py` 异步化：同步工具 `to_thread` + `asyncio.gather` + `Semaphore` + `wait_for` + `return_exceptions=True`
+- [x] T12.5 Researcher 双通道：`kb_search` 优先，`max_score` 低于阈值降级 `web_search`，降级事件写 trace
+- [x] T12.6 Researcher 返工模式：`missing_aspects` 非空时只查缺口
+- [x] T12.7 `agents/graph.py`：新增 critic 节点与 `should_revise` 条件边
+- [x] T12.8 防死循环三重保险（硬上限 / 定向补查 / 分数无提升即退出）
+- [x] T12.9 接入 `AsyncSqliteSaver` Checkpointer：稳定 `thread_id`、`None` 输入恢复、`durability="sync"`
+- [x] T12.10 `backend/api.py` / `backend/streaming.py`：异步 SSE、`updates` + `custom` 事件与恢复参数
+- [x] T12.11 `frontend/app.py` 展示 Critic、定向返工、联网降级与 trace 汇总 usage
+- [x] T12.12 `tests/test_critic.py`、`tests/test_graph_revision.py`、`tests/test_checkpoint.py`（mock LLM，验证回环、上限、停滞退出与恢复）
 
 **验收标准**
 
-- 构造一个低质量场景，能观察到 Critic 打低分 → 回退 Researcher → 分数提升 → 进入 Writer
-- 构造一个永远不达标的场景，验证回退次数**严格不超过** `MAX_REVISION`
-- 并行前后耗时对比有实测数据（写入 Phase 13 评测报告）
-- 中断任务后可从 Checkpoint 恢复
+- [x] 构造一个低质量场景，能观察到 Critic 打低分 → 回退 Researcher → 分数提升 → 进入 Writer
+- [x] 构造一个永远不达标的场景，验证回退次数**严格不超过** `MAX_REVISION`
+- [ ] 并行前后耗时对比有真实任务实测数据并写入 Phase 13 评测报告（Phase 12 已有 fake IO + trace latency 的确定性回归测试，但它不是对外指标）
+- [x] 中断任务后可从 Checkpoint 恢复
 
 > ⭐ **Phase 12 完成即达 M1 可投最低线**，此时应立即执行 Phase 16 的 README 部分并推送 GitHub，不要等后续 Phase。
 

@@ -40,12 +40,24 @@
 | **rank-bm25** | BM25 关键词检索 | 轻量纯 Python 实现，够用且无额外服务 |
 | **jieba** | 中文分词 | BM25 通道的前置分词，中文场景必需 |
 | **pydantic-settings** | 配置管理 | 类型校验 + `.env` 加载，替代散落的 `os.getenv` |
-| **langgraph-checkpoint-sqlite** | 断点续跑 | LangGraph 官方 SQLite Checkpointer |
+| **langgraph-checkpoint-sqlite** | 断点续跑 | 已作为直接依赖接入；提供异步 `AsyncSqliteSaver`，状态按 `thread_id` 持久化 |
 | **mcp[cli]** / **fastmcp** | MCP Server | 暴露 `deep_research` / `kb_search` 工具 |
 | **pypdf** | PDF 解析 | 知识库支持 PDF 文档 |
-| **httpx** | 异步 HTTP / 测试客户端 | 当前用于 FastAPI 测试，Phase 12 异步网络调用复用；同步远程 embedding 使用既有 `requests` |
 
 > `onnxruntime` 由 `fastembed` 间接引入，无需显式声明。
+
+#### Phase 12 编排依赖锁定
+
+`pyproject.toml` 保存允许升级的依赖约束，实际可复现安装版本以 `uv.lock` 为准。当前锁文件中的关键版本为：
+
+| 包名 | `pyproject.toml` 约束 | `uv.lock` 版本 | 关系 |
+|------|----------------------|----------------|------|
+| `langgraph` | `>=0.2.0` | `1.1.10` | 图编排、v2 streaming 与 durability |
+| `langgraph-checkpoint-sqlite` | `>=3.0.0` | `3.1.1` | Phase 12 新增的 SQLite Checkpointer 直接依赖 |
+| `langgraph-checkpoint` | 间接依赖 | `4.2.0` | Checkpoint 基础协议与状态模型 |
+| `aiosqlite` | 间接依赖 | `0.22.1` | `AsyncSqliteSaver` 的异步 SQLite 驱动 |
+
+> 这里记录的是锁文件事实，不把锁版本反写成业务代码判断。依赖升级后应重新生成 `uv.lock`，并先验证流式事件结构、Checkpoint 恢复与完整测试集。
 
 ### 2.3 开发依赖
 
@@ -55,7 +67,7 @@
 | pytest-mock | Mock |
 | pytest-asyncio | 异步测试（v2 大量使用） |
 | pytest-cov | 覆盖率统计 |
-| httpx | FastAPI 测试客户端 |
+| httpx | FastAPI 测试客户端（仅开发依赖；Phase 12 的同步检索工具通过 `asyncio.to_thread` 接入异步节点） |
 | ruff | Lint + 格式化（CI 使用） |
 
 ---
@@ -128,6 +140,8 @@ BACKEND_URL=http://127.0.0.1:8000
 
 > `.env.example` 需与本节保持同步。新增配置项必须同时更新三处：`core/config.py`、`.env.example`、本文档。
 
+`CHECKPOINT_DB` 保存的是 LangGraph 恢复状态，不是指标数据库。后端在一次 `astream()` 的完整生命周期内持有 `AsyncSqliteSaver`，以稳定 `thread_id` 读写状态；恢复时传入 `None` 继续已有任务，并使用 `durability="sync"` 保证下一步执行前完成持久化。该 SQLite 文件及其 WAL/SHM 文件均为运行时产物，已从 Git 排除。
+
 模型价格默认值按 2026-08-24 的 [DeepSeek 官方模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing) 配置，单位为人民币 / 百万 token；输入成本分别记录缓存命中与未命中。价格变化时必须同时更新 `MODEL_PRICING` 和 `MODEL_PRICING_VERSION`。
 
 ---
@@ -146,7 +160,8 @@ uv sync --group dev
 
 | 依赖 | 风险点 |
 |------|--------|
-| langgraph | 0.2 → 0.3 有 API 变更，升级前先跑 `tests/test_graph.py` |
+| langgraph | 当前锁定 `1.1.10`；升级可能改变 `astream(version="v2")` 事件结构、节点注入或 durability 行为，升级前需跑图、后端流与 checkpoint 测试 |
+| langgraph-checkpoint-sqlite | 当前锁定 `3.1.1`；升级前验证 `AsyncSqliteSaver` 生命周期、同一 `thread_id` 恢复和 `None` 输入续跑 |
 | chromadb | 主版本升级会改变持久化目录格式，需重建索引 |
 | fastembed | 模型名称随版本调整，锁定 `EMBEDDING_MODEL` 后不随意变更，否则历史向量库失效 |
 

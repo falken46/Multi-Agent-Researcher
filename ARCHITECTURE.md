@@ -121,6 +121,17 @@ async def achat(messages, *, node: str, trace_id: str, json_mode: bool = False) 
 
 > 价格表从配置文件读取而非硬编码，因为模型定价会变；实际数值需在实现时从服务商官方定价页核对填入。
 
+#### `core/checkpoint.py`
+
+**职责**：集中管理 LangGraph 异步 SQLite Checkpointer 的生命周期。
+
+- 使用 `AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB)` 创建持久化器
+- 通过异步上下文管理器保证 Checkpointer 在一次 SSE 流执行期间始终保持打开，并在流结束后安全关闭
+- Checkpoint 文件默认写入 `data/checkpoints.sqlite`，属于运行时产物，不进入 Git
+- Checkpoint 只保存 LangGraph 状态与执行位置；调用指标仍以 trace JSONL 为唯一数据源
+
+> **为什么这里使用 SQLite，而 trace 使用 JSONL**：两者解决的问题不同。Checkpoint 需要按 `thread_id` 随机读取状态并恢复图执行，SQLite 适合状态持久化；trace 以追加事件和离线聚合为主，JSONL 更便于审计与评测。不能从 Checkpoint 反推指标，也不能用 trace 代替图状态恢复。
+
 ---
 
 ### 2.2 检索层 `rag/`
@@ -209,6 +220,14 @@ class Citation(TypedDict):
     origin: str        # "kb" | "web"
     snippet: str
 
+class Usage(TypedDict):
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    total_cost: float
+    llm_calls: int
+    total_latency_ms: float
+
 class ResearchState(TypedDict):
     # v1 已有
     topic: str
@@ -221,10 +240,12 @@ class ResearchState(TypedDict):
     citations: dict[str, list[Citation]]   # 子问题 -> 来源列表
     critique: str                          # Critic 文字意见
     quality_score: float                   # Critic 评分 0-1
+    quality_history: list[float]           # 每次 Critic 评分，用于检测质量停滞
     missing_aspects: list[str]             # 需补查方向
     revision_count: int                    # 反思轮次
     trace_id: str                          # 全链路追踪 ID
-    usage: dict                            # 累计 token 与成本
+    usage: Usage                           # 由 trace 汇总的 token、成本、调用与耗时
+    fallback_queries: list[str]            # 本地召回不足而转联网的查询
 ```
 
 > **`retry_count` 与 `revision_count` 为什么要分开**：前者是"技术失败重试"（检索抛异常、模型返回空），后者是"质量不达标的主动返工"。两者混用会导致一次网络抖动吃掉返工配额，因此必须分开计数，各自独立设上限。
@@ -246,13 +267,13 @@ START -> planner -> researcher -> [should_continue] --+--> critic
 | 函数 | 位置 | 判断逻辑 |
 |------|------|----------|
 | `should_continue` | researcher 之后 | 有结果 → critic；无结果且未超 `retry_count` 上限 → 重试 researcher；无结果且已超上限 → writer（降级报告） |
-| `should_revise` | critic 之后 | `quality_score >= QUALITY_THRESHOLD` → writer；低于阈值且 `revision_count < MAX_REVISION` → 回退 researcher；否则 → writer |
+| `should_revise` | critic 之后 | 达到质量阈值、没有可执行缺口、达到返工上限或质量已停滞 → writer；否则 → 回退 researcher |
 
 **防死循环三重保险**：
 
-1. `revision_count` 硬上限（`MAX_REVISION`，默认 2）
-2. 回退时把 `missing_aspects` 写入状态，Researcher 只针对缺失方向补查，不重复全量检索
-3. 若两轮返工后分数**没有提升**，直接进入 Writer，不再尝试
+1. `revision_count` 只在 Researcher 真正开始一次定向返工时加一，并受 `MAX_REVISION` 硬上限约束（默认 2）
+2. Critic 必须给出非空 `missing_aspects` 才允许返工；Researcher 只查这些缺口，完成后清空待办，不重复全量检索
+3. `quality_history` 保存每次 Critic 分数；至少执行两次返工后，若最新分数没有超过此前最佳分数，直接进入 Writer
 
 > **为什么 Critic 只评审不改写**：同一个节点既评价又修改，会倾向于给自己的修改打高分，评分随之失去意义；分离之后 `quality_score` 才能作为评测指标使用。
 
@@ -265,18 +286,40 @@ START -> planner -> researcher -> [should_continue] --+--> critic
 #### `agents/researcher.py`（改造要点）
 
 ```python
-async def researcher_node(state) -> dict:
-    semaphore = asyncio.Semaphore(config.RESEARCH_CONCURRENCY)
+async def researcher_node(state, *, writer: StreamWriter) -> dict:
+    settings = get_settings()
+    system_prompt = load_prompt("researcher_system")
+    timeout_seconds = settings.llm_timeout + settings.embedding_timeout + 30.0
+    semaphore = asyncio.Semaphore(settings.research_concurrency)
     targets = state["missing_aspects"] or state["sub_questions"]   # 返工时只查缺口
     results = await asyncio.gather(
-        *(_research_one(q, semaphore, state["trace_id"]) for q in targets),
+        *(
+            _research_with_limit(
+                target=q,
+                semaphore=semaphore,
+                timeout_seconds=timeout_seconds,
+                system_prompt=system_prompt,
+                trace_id=state["trace_id"],
+                settings=settings,
+                stream_writer=writer,
+            )
+            for q in targets
+        ),
         return_exceptions=True,
     )
 ```
 
+- 同步的 `kb_search` / `web_search` 通过 `asyncio.to_thread` 移出事件循环，避免阻塞 FastAPI
 - `return_exceptions=True` 保证单个子问题失败不炸整体
 - `Semaphore` 控制并发，避免触发搜索 API 限流
+- 每个子问题用 `asyncio.wait_for` 包住整条研究链路，超时预算为 `LLM_TIMEOUT + EMBEDDING_TIMEOUT + 30s`
 - 每个子问题内部：`kb_search` → 判断 `max_score` → 必要时 `web_search` → LLM 摘要 → 产出 `citations`
+
+#### Checkpoint 与恢复语义
+
+后端以稳定的 `thread_id` 作为 LangGraph `configurable.thread_id`。新任务把完整初始 `ResearchState` 传给图；恢复任务先用同一个 `thread_id` 读取快照，校验 topic 后，以 `None` 作为图输入继续执行，而不是重新提交初始 state。每次流式执行使用 `durability="sync"`，节点继续前先同步持久化 checkpoint。
+
+`AsyncSqliteSaver` 必须和图运行处于同一个异步上下文中：不能在 `build_graph()` 后立刻关闭数据库连接，再拿已编译图去执行。`backend/streaming.py` 因此在整个 `astream()` 生命周期内持有 Checkpointer。
 
 ---
 
@@ -284,7 +327,15 @@ async def researcher_node(state) -> dict:
 
 #### `backend/api.py`（沿用 v1，扩展事件）
 
-SSE 事件类型新增：`critic_start` / `critic_done` / `revision` / `fallback` / `usage`，前端据此展示反思过程与成本。
+`POST /research` 除 `topic` 外还接受可选 `thread_id` 与 `resume`；恢复请求必须提供原 `thread_id`。
+
+后端调用 LangGraph `astream(stream_mode=["updates", "custom"], version="v2")`：
+
+- `updates` 流携带节点状态增量，后端将其合并为当前状态摘要并输出 `progress`
+- `custom` 流由 Critic / Researcher 主动发送，直接映射为 `critic_start` / `critic_done` / `revision` / `fallback`
+- 图结束后只调用 `trace.summarize(trace_id)` 生成 `usage`，再发送 `complete`；前端不自行估算 token、成本或耗时
+
+前端据此展示反思过程、定向返工、本地检索降级与 usage。SSE 传输状态，JSONL trace 留存指标，SQLite checkpoint 保存恢复点，三者职责互不替代。
 
 #### `mcp/server.py`（新增）
 
@@ -302,9 +353,9 @@ SSE 事件类型新增：`critic_start` / `critic_done` / `revision` / `fallback
 ## 3. 数据流：一次完整任务
 
 ```
-1.  前端 POST /research {topic}
-2.  后端生成 trace_id，创建初始 state，异步启动 LangGraph
-3.  planner_node    -> core.llm.achat(json_mode=True) -> sub_questions[]
+1.  前端 POST /research {topic, thread_id?, resume?}
+2.  新任务生成 trace_id / thread_id 并创建初始 state；恢复任务按 thread_id 读取 checkpoint，以 `None` 输入继续
+3.  planner_node    -> core.llm.chat(json_mode=True) -> sub_questions[]
                        写 trace: node_start / llm_call / node_end
 4.  researcher_node -> asyncio.gather 并发处理子问题
                        单个子问题: kb_search -> [是否降级] -> web_search -> achat 摘要
@@ -313,9 +364,10 @@ SSE 事件类型新增：`critic_start` / `critic_done` / `revision` / `fallback
 6.  critic_node     -> achat(json_mode=True) -> quality_score / missing_aspects
 7.  should_revise   -> 分数不足且未超上限 -> 回到步骤 4（只查 missing_aspects）
                     -> 否则 -> 步骤 8
-8.  writer_node     -> achat -> final_report（带角标引用）
-9.  trace.summarize(trace_id) -> usage 汇总，通过 SSE 推送前端
-10. 前端渲染报告 + Trace 面板
+8.  writer_node     -> chat -> final_report（带角标引用）
+9.  每个节点提交前以 `durability="sync"` 写 checkpoint
+10. trace.summarize(trace_id) -> usage 汇总，通过 SSE 推送前端
+11. 前端渲染报告、Critic 过程、降级查询与 usage 面板
 ```
 
 ---
@@ -337,7 +389,8 @@ deepresearch-agent/
 │   ├── config.py
 │   ├── llm.py
 │   ├── trace.py
-│   └── costs.py
+│   ├── costs.py
+│   └── checkpoint.py          # AsyncSqliteSaver 生命周期
 │
 ├── rag/                       # 【v2 新增】检索层
 │   ├── loader.py
@@ -389,7 +442,8 @@ deepresearch-agent/
 │
 ├── data/
 │   ├── kb/                    # 知识库原始文档
-│   └── chroma/                # 向量库持久化
+│   ├── chroma/                # 向量库持久化
+│   └── checkpoints.sqlite     # 运行时 checkpoint（Git 忽略）
 │
 ├── traces/                    # trace JSONL 落盘
 │
@@ -413,7 +467,7 @@ deepresearch-agent/
 | 7 | 并发 | asyncio + Semaphore | 子问题相互独立且为 IO 密集，异步收益最大 | 多线程：GIL 下无优势且难与 FastAPI 配合 |
 | 8 | Trace 存储 | JSONL 追加写 | 并发安全、可 grep、评测脚本可直接解析 | SQLite：并发写需加锁，收益不匹配复杂度 |
 | 9 | 配置管理 | pydantic-settings 集中管理 | 类型校验 + 单一真源，避免 `os.getenv` 散落 | 直接读环境变量：v1 的问题，无校验、易漂移 |
-| 10 | Checkpointer | LangGraph SqliteSaver | 官方实现，支持断点续跑与状态回放 | 纯内存：进程退出即丢失 |
+| 10 | Checkpointer | LangGraph `AsyncSqliteSaver` | 适配异步图执行；稳定 `thread_id` + `None` 输入恢复，并以同步 durability 保证继续前落盘 | 纯内存：进程退出即丢失；同步 `SqliteSaver`：会阻塞异步 SSE 链路 |
 | 11 | 对外协议 | HTTP + MCP 双通道 | HTTP 面向前端，MCP 面向 LLM 客户端，覆盖两类消费者 | 仅 HTTP：错失 MCP Server 开发经验 |
 
 ---
