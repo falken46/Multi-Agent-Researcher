@@ -6,11 +6,12 @@ import logging
 import time
 
 from agents.prompt_loader import load_prompt
-from agents.state import ResearchState
+from agents.state import Citation, ResearchState
 from core.llm import LLMError, chat
 from core.trace import emit, new_trace_id
 
 logger = logging.getLogger(__name__)
+
 
 class WriterError(RuntimeError):
     """Writer Agent 写作失败时抛出。"""
@@ -48,8 +49,6 @@ def writer_node(state: ResearchState) -> dict[str, object]:
             raise WriterError("topic must not be empty")
         if not sub_questions:
             raise WriterError("sub_questions must not be empty")
-        if not research_results:
-            raise WriterError("research_results must not be empty")
 
         system_prompt = load_prompt("writer_system")
         user_prompt = build_writer_prompt(
@@ -57,6 +56,7 @@ def writer_node(state: ResearchState) -> dict[str, object]:
             sub_questions=sub_questions,
             research_results=research_results,
             errors=errors,
+            citations=state.get("citations", {}),
         )
         final_report = _call_writer_model(
             user_prompt=user_prompt,
@@ -89,6 +89,7 @@ def build_writer_prompt(
     sub_questions: list[str],
     research_results: dict[str, str],
     errors: list[str] | None = None,
+    citations: dict[str, list[Citation]] | None = None,
 ) -> str:
     """拼装 Writer Agent 的用户输入 prompt。"""
     question_blocks = []
@@ -109,16 +110,45 @@ def build_writer_prompt(
     if not error_block:
         error_block = "无"
 
+    sub_question_set = set(sub_questions)
+    supplemental_blocks = [
+        "\n".join([f"### 补充方向：{target}", summary])
+        for target, summary in research_results.items()
+        if target not in sub_question_set
+    ]
+    supplemental_block = "\n\n".join(supplemental_blocks) or "无"
+    citation_block = _build_citation_block(citations or {})
+
     return "\n\n".join(
         [
             f"研究主题:\n{topic}",
             "子问题与资料:",
             "\n\n".join(question_blocks),
+            "Critic 返工后的补充资料:",
+            supplemental_block,
+            "结构化引用（写作时用 [编号] 对应来源）:",
+            citation_block,
             "流程错误记录:",
             error_block,
             "请基于以上资料生成完整 Markdown 研究报告。",
         ]
     )
+
+
+def _build_citation_block(citations: dict[str, list[Citation]]) -> str:
+    lines: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for target, items in citations.items():
+        for item in items:
+            key = (item["source"], item["origin"])
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(
+                f"[{len(lines) + 1}] ({item['origin']}) {item['source']} | "
+                f"对应方向: {target} | 摘要: {item['snippet']}"
+            )
+    return "\n".join(lines) or "无"
 
 
 def _call_writer_model(user_prompt: str, system_prompt: str, trace_id: str) -> str:
@@ -157,4 +187,4 @@ def _emit_node_error(trace_id: str, exc: Exception, started_at: float) -> None:
     )
 
 
-__all__ = ["build_writer_prompt", "writer_node"]
+__all__ = ["writer_node"]

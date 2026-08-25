@@ -14,10 +14,11 @@ from core.config import get_settings
 
 DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
 REQUEST_TIMEOUT = (5.0, 600.0)
-NODE_ORDER = ["planner", "researcher", "writer"]
+NODE_ORDER = ["planner", "researcher", "critic", "writer"]
 NODE_LABELS = {
     "planner": "Planner",
     "researcher": "Researcher",
+    "critic": "Critic",
     "writer": "Writer",
 }
 
@@ -46,6 +47,13 @@ class ViewState(TypedDict):
     final_report: str
     errors: list[str]
     retry_count: int
+    critique: str
+    quality_score: float | None
+    missing_aspects: list[str]
+    revision_count: int
+    fallback_count: int
+    fallback_queries: list[str]
+    usage: dict[str, Any]
     events: list[dict[str, str]]
 
 
@@ -62,6 +70,13 @@ def create_view_state(topic: str = "") -> ViewState:
         "final_report": "",
         "errors": [],
         "retry_count": 0,
+        "critique": "",
+        "quality_score": None,
+        "missing_aspects": [],
+        "revision_count": 0,
+        "fallback_count": 0,
+        "fallback_queries": [],
+        "usage": {},
         "events": [],
     }
 
@@ -134,8 +149,28 @@ def apply_event_to_view_state(event: SSEEvent, view_state: ViewState) -> ViewSta
         _apply_state_summary(view_state, state_summary)
 
     payload_status = str(payload.get("status", ""))
-    if event_name == "progress" and node in NODE_LABELS:
-        _mark_node(view_state, node, _display_status(payload_status), _node_detail(node, view_state))
+    if event_name == "critic_start":
+        _mark_node(view_state, "critic", "运行中", "正在评审资料质量")
+    elif event_name == "critic_done":
+        _apply_critic_payload(view_state, payload)
+        critic_status = "部分完成" if payload.get("degraded") else "完成"
+        _mark_node(view_state, "critic", critic_status, _node_detail("critic", view_state))
+    elif event_name == "revision":
+        _apply_revision_payload(view_state, payload)
+        _mark_node(view_state, "critic", "需返工", _node_detail("critic", view_state))
+        _mark_node(view_state, "researcher", "运行中", "正在定向补查评审缺口")
+    elif event_name == "fallback":
+        _apply_fallback_payload(view_state, payload)
+        _mark_node(view_state, "researcher", "运行中", _node_detail("researcher", view_state))
+    elif event_name == "usage":
+        _apply_usage_payload(view_state, payload)
+    elif event_name == "progress" and node in NODE_LABELS:
+        _mark_node(
+            view_state,
+            node,
+            _display_status(payload_status),
+            _node_detail(node, view_state),
+        )
         _apply_error_statuses(view_state)
         if payload_status not in {"failed", "error"}:
             _mark_next_node_running(view_state, node)
@@ -228,7 +263,7 @@ def _render_workspace(view_state: ViewState) -> None:
 
 
 def _render_agent_status(view_state: ViewState) -> None:
-    columns = st.columns(3)
+    columns = st.columns(4)
     for index, node in enumerate(NODE_ORDER):
         status = view_state["agent_status"][node]
         with columns[index]:
@@ -245,7 +280,9 @@ def _render_errors(view_state: ViewState) -> None:
 
 
 def _render_progress_details(view_state: ViewState) -> None:
-    planner_tab, researcher_tab, writer_tab = st.tabs(["Planner", "Researcher", "Writer"])
+    planner_tab, researcher_tab, critic_tab, writer_tab = st.tabs(
+        ["Planner", "Researcher", "Critic", "Writer"]
+    )
 
     with planner_tab:
         if view_state["sub_questions"]:
@@ -257,8 +294,27 @@ def _render_progress_details(view_state: ViewState) -> None:
     with researcher_tab:
         st.metric("资料摘要", view_state["research_result_count"])
         st.metric("重试次数", view_state["retry_count"])
+        st.metric("联网降级次数", view_state["fallback_count"])
+        if view_state["fallback_queries"]:
+            st.caption("本地知识库不足，已联网补查：")
+            for query in view_state["fallback_queries"]:
+                st.markdown(f"- {query}")
         if view_state["errors"]:
             st.error("\n".join(view_state["errors"]))
+
+    with critic_tab:
+        score = view_state["quality_score"]
+        st.metric("质量评分", "等待评审" if score is None else f"{score:.2f} / 1.00")
+        st.metric("返工次数", view_state["revision_count"])
+        if view_state["critique"]:
+            st.markdown("#### 评审意见")
+            st.write(view_state["critique"])
+        else:
+            st.info("等待 Critic 评审。")
+        if view_state["missing_aspects"]:
+            st.markdown("#### 待补查方向")
+            for aspect in view_state["missing_aspects"]:
+                st.markdown(f"- {aspect}")
 
     with writer_tab:
         if view_state["final_report"]:
@@ -266,6 +322,16 @@ def _render_progress_details(view_state: ViewState) -> None:
             st.metric("报告字符数", len(view_state["final_report"]))
         else:
             st.info("等待报告。")
+        _render_usage(view_state["usage"])
+
+
+def _render_usage(usage: dict[str, Any]) -> None:
+    st.markdown("#### 本次运行开销")
+    metrics = st.columns(4)
+    metrics[0].metric("总 Token", _as_int(usage.get("total_tokens")))
+    metrics[1].metric("模型调用", _as_int(usage.get("llm_calls")))
+    metrics[2].metric("总成本（元）", f"{_as_float(usage.get('total_cost')):.6f}")
+    metrics[3].metric("总耗时", f"{_as_float(usage.get('total_latency_ms')) / 1000:.2f} 秒")
 
 
 def _render_final_report(view_state: ViewState) -> None:
@@ -301,16 +367,111 @@ def _build_sse_event(event_name: str, data_lines: list[str]) -> SSEEvent:
 def _apply_state_summary(view_state: ViewState, state_summary: dict[str, Any]) -> None:
     view_state["topic"] = str(state_summary.get("topic", view_state["topic"]))
     view_state["sub_questions"] = _string_list(state_summary.get("sub_questions", []))
-    view_state["research_result_count"] = int(state_summary.get("research_result_count", 0))
+    view_state["research_result_count"] = _as_int(
+        state_summary.get("research_result_count", 0)
+    )
     view_state["final_report"] = str(state_summary.get("final_report", ""))
     view_state["errors"] = _string_list(state_summary.get("errors", []))
-    view_state["retry_count"] = int(state_summary.get("retry_count", 0))
+    view_state["retry_count"] = _as_int(state_summary.get("retry_count", 0))
+    view_state["critique"] = str(state_summary.get("critique", view_state["critique"]))
+    if "quality_score" in state_summary and (
+        state_summary.get("critique") or state_summary.get("quality_history")
+    ):
+        view_state["quality_score"] = _optional_float(state_summary.get("quality_score"))
+    view_state["missing_aspects"] = _string_list(
+        state_summary.get("missing_aspects", view_state["missing_aspects"])
+    )
+    view_state["revision_count"] = _as_int(
+        state_summary.get("revision_count", view_state["revision_count"])
+    )
+    if "fallback_count" in state_summary:
+        view_state["fallback_count"] = max(
+            view_state["fallback_count"],
+            _as_int(state_summary.get("fallback_count")),
+        )
+    if isinstance(state_summary.get("fallback_queries"), list):
+        _merge_fallback_queries(
+            view_state,
+            _string_list(state_summary.get("fallback_queries")),
+        )
+    state_usage = state_summary.get("usage")
+    if isinstance(state_usage, dict):
+        view_state["usage"].update(state_usage)
+
+
+def _apply_critic_payload(view_state: ViewState, payload: dict[str, Any]) -> None:
+    if "quality_score" in payload:
+        view_state["quality_score"] = _optional_float(payload.get("quality_score"))
+    view_state["critique"] = str(payload.get("critique", view_state["critique"]))
+    view_state["missing_aspects"] = _string_list(
+        payload.get("missing_aspects", view_state["missing_aspects"])
+    )
+
+
+def _apply_revision_payload(view_state: ViewState, payload: dict[str, Any]) -> None:
+    revision_round = _as_int(payload.get("round", payload.get("revision_count", 0)))
+    view_state["revision_count"] = max(view_state["revision_count"], revision_round)
+    if isinstance(payload.get("missing_aspects"), list):
+        view_state["missing_aspects"] = _string_list(payload["missing_aspects"])
+
+
+def _apply_fallback_payload(view_state: ViewState, payload: dict[str, Any]) -> None:
+    view_state["fallback_count"] += 1
+    query = str(payload.get("query", "")).strip()
+    if query:
+        _merge_fallback_queries(view_state, [query])
+
+
+def _apply_usage_payload(view_state: ViewState, payload: dict[str, Any]) -> None:
+    nested_usage = payload.get("usage")
+    usage = nested_usage if isinstance(nested_usage, dict) else payload
+    view_state["usage"].update(usage)
+    count_payload = payload if isinstance(nested_usage, dict) else usage
+    if "fallback_count" in count_payload:
+        view_state["fallback_count"] = max(
+            view_state["fallback_count"],
+            _as_int(count_payload.get("fallback_count")),
+        )
+    if "revision_count" in count_payload:
+        view_state["revision_count"] = max(
+            view_state["revision_count"],
+            _as_int(count_payload.get("revision_count")),
+        )
+
+
+def _merge_fallback_queries(view_state: ViewState, queries: list[str]) -> None:
+    for query in queries:
+        if query and query not in view_state["fallback_queries"]:
+            view_state["fallback_queries"].append(query)
 
 
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _mark_node(view_state: ViewState, node: str, status: str, detail: str) -> None:
@@ -333,6 +494,8 @@ def _apply_error_statuses(view_state: ViewState) -> None:
             _mark_node(view_state, "planner", "失败", error_text)
         elif error_text.startswith("Researcher:"):
             _mark_node(view_state, "researcher", "失败", error_text)
+        elif error_text.startswith("Critic:"):
+            _mark_node(view_state, "critic", "失败", error_text)
         elif error_text.startswith("Writer:"):
             _mark_node(view_state, "writer", "失败", error_text)
 
@@ -344,11 +507,11 @@ def _mark_incomplete_nodes_blocked(view_state: ViewState) -> None:
 
 
 def _mark_next_node_running(view_state: ViewState, node: str) -> None:
-    current_index = NODE_ORDER.index(node)
-    if current_index + 1 >= len(NODE_ORDER):
+    # Critic 后可能回到 Researcher，也可能进入 Writer；必须等待真实事件，
+    # 不能按静态顺序提前把 Writer 标为运行中。
+    next_node = {"planner": "researcher", "researcher": "critic"}.get(node)
+    if next_node is None:
         return
-
-    next_node = NODE_ORDER[current_index + 1]
     if view_state["agent_status"][next_node]["status"] == "等待":
         _mark_node(view_state, next_node, "运行中", "等待后端事件")
 
@@ -357,7 +520,14 @@ def _node_detail(node: str, view_state: ViewState) -> str:
     if node == "planner":
         return f"{len(view_state['sub_questions'])} 个子问题"
     if node == "researcher":
-        return f"{view_state['research_result_count']} 个资料摘要"
+        return (
+            f"{view_state['research_result_count']} 个资料摘要，"
+            f"{view_state['fallback_count']} 次联网降级"
+        )
+    if node == "critic":
+        score = view_state["quality_score"]
+        score_text = "等待评分" if score is None else f"评分 {score:.2f}"
+        return f"{score_text}，返工 {view_state['revision_count']} 次"
     if node == "writer":
         return f"{len(view_state['final_report'])} 个字符"
     return ""

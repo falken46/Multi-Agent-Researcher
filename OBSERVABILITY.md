@@ -60,7 +60,7 @@
 
 | 考虑 | 说明 |
 |------|------|
-| 并发安全 | 追加写单行，多协程写同一文件不需要加锁 |
+| 并发安全 | 单行追加写，并按 trace 文件使用进程内锁避免同一文件写入交错 |
 | 排查友好 | 可直接 `grep fallback traces/**/*.jsonl` 定位所有降级 |
 | 评测友好 | `eval/metrics.py` 按行解析即可，无需 ORM |
 | 成本低 | 不引入数据库依赖，Docker 镜像不变大 |
@@ -129,7 +129,23 @@ Streamlit 在报告下方展示：
 
 ---
 
-## 6. 日志与 trace 的分工
+## 6. Trace、SSE 与 Checkpoint 的边界
+
+Phase 12 同时使用三种机制，但它们不是三份重复存储：
+
+| 机制 | 数据 | 生命周期与用途 |
+|------|------|----------------|
+| trace JSONL | `llm_call`、`fallback`、`revision`、错误与节点耗时 | 长期可审计，是 token、成本、耗时与行为指标的唯一来源 |
+| SSE | `updates` 节点状态增量，以及 `critic_start` / `critic_done` / `revision` / `fallback` 自定义事件 | 当前连接内实时传给前端，不作为指标真源 |
+| SQLite Checkpoint | LangGraph 状态与下一执行位置 | 按稳定 `thread_id` 保存，用于中断后恢复，不参与指标计算 |
+
+后端使用 `astream(stream_mode=["updates", "custom"], version="v2")` 同时接收状态更新与 Agent 自定义事件。图结束并写入 `task_end` 后，后端调用 `summarize(trace_id)` 生成 `usage` SSE；前端只展示该结果，不从 progress 文本或 Checkpoint 自行计算指标。
+
+恢复执行时，后端用原 `thread_id` 读取 checkpoint，并以 `None` 作为图输入继续；`durability="sync"` 确保下一步开始前完成状态持久化。`AsyncSqliteSaver` 的连接在整个 SSE 流期间保持打开，流结束后再关闭。
+
+---
+
+## 7. 日志与 trace 的分工
 
 | | 日志（logging） | Trace |
 |---|---|---|
@@ -142,7 +158,7 @@ Streamlit 在报告下方展示：
 
 ---
 
-## 7. 这一层支撑的面试问题
+## 8. 这一层支撑的面试问题
 
 | 问题 | 依托的数据 |
 |------|-----------|
