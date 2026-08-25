@@ -43,7 +43,7 @@
 | **langgraph-checkpoint-sqlite** | 断点续跑 | LangGraph 官方 SQLite Checkpointer |
 | **mcp[cli]** / **fastmcp** | MCP Server | 暴露 `deep_research` / `kb_search` 工具 |
 | **pypdf** | PDF 解析 | 知识库支持 PDF 文档 |
-| **httpx** | 异步 HTTP | 异步检索与远程 embedding 后端 |
+| **httpx** | 异步 HTTP / 测试客户端 | 当前用于 FastAPI 测试，Phase 12 异步网络调用复用；同步远程 embedding 使用既有 `requests` |
 
 > `onnxruntime` 由 `fastembed` 间接引入，无需显式声明。
 
@@ -93,12 +93,20 @@ TAVILY_API_KEY=tvly-xxx
 # ---- 检索层 ----
 EMBEDDING_BACKEND=fastembed          # fastembed | remote | fake
 EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
+EMBEDDING_REMOTE_URL=
+EMBEDDING_API_KEY=
+EMBEDDING_TIMEOUT=30
 CHROMA_DIR=data/chroma
+CHROMA_COLLECTION=deepresearch_kb
+BM25_INDEX_PATH=data/bm25/index.pkl
 KB_DIR=data/kb
 CHUNK_SIZE=500
 CHUNK_OVERLAP=80
 RETRIEVAL_TOP_K=20
+VECTOR_SEARCH_ENABLED=true
+BM25_SEARCH_ENABLED=true
 RERANK_BACKEND=onnx                  # onnx | llm | none
+RERANK_MODEL=BAAI/bge-reranker-base
 RERANK_TOP_N=5
 RRF_K=60
 KB_SCORE_THRESHOLD=0.35
@@ -130,7 +138,7 @@ BACKEND_URL=http://127.0.0.1:8000
 uv sync --group dev
 ```
 
-首次运行会下载 embedding 模型（约 100MB 级），后续从本地缓存加载。国内网络若下载失败，可设置镜像端点环境变量后重试。
+首次使用默认后端会下载 embedding 模型，首次使用 ONNX rerank 时还会下载独立的 cross-encoder 模型，后续从本地缓存加载。只做离线测试时使用 `EMBEDDING_BACKEND=fake` 与 `RERANK_BACKEND=none`，不会下载模型或调用网络。
 
 ---
 

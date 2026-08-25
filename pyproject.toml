@@ -19,6 +19,11 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.0.0",
     "rich>=13.0.0",
+    "fastembed>=0.7.0",
+    "chromadb>=1.0.0",
+    "rank-bm25>=0.2.2",
+    "jieba>=0.42.1",
+    "pypdf>=5.0.0",
 ]
 
 [dependency-groups]

@@ -69,7 +69,11 @@
 | `MODEL_NAME` | deepseek-v4-flash | 主模型 |
 | `EMBEDDING_BACKEND` | fastembed | `fastembed` / `remote` / `fake` |
 | `EMBEDDING_MODEL` | BAAI/bge-small-zh-v1.5 | 中文小模型 |
+| `CHROMA_COLLECTION` | deepresearch_kb | Chroma collection 名称 |
+| `BM25_INDEX_PATH` | data/bm25/index.pkl | BM25 本地索引文件 |
 | `RETRIEVAL_TOP_K` | 20 | 单通道召回数量 |
+| `VECTOR_SEARCH_ENABLED` | true | 是否启用向量通道 |
+| `BM25_SEARCH_ENABLED` | true | 是否启用关键词通道 |
 | `RERANK_TOP_N` | 5 | 重排后进入上下文的数量 |
 | `RRF_K` | 60 | RRF 平滑常数 |
 | `KB_SCORE_THRESHOLD` | 0.35 | 低于此分数触发联网降级 |
@@ -169,13 +173,15 @@ rerank.py   对融合后 Top-M 候选重排，取 Top-N
 | `vectorstore.py` | 向量库封装 | 只暴露 `add` / `query` / `count`，屏蔽 Chroma 细节，便于替换 |
 | `bm25.py` | 关键词检索 | jieba 精确模式分词；索引与向量库共享同一份 chunk id |
 | `hybrid.py` | 融合 | RRF，不做分数归一化 |
-| `rerank.py` | 重排 | 两种实现可切换：ONNX cross-encoder / LLM rerank |
+| `rerank.py` | 重排 | ONNX cross-encoder / LLM / none 可切换；失败退回 RRF 顺序 |
 | `pipeline.py` | 对外入口 | `build_index(dir)` 与 `search(query, top_n)` |
 | `index_cli.py` | 建库命令行 | `python -m rag.index_cli --dir data/kb` |
 
 > **为什么用 RRF 而不是加权分数融合**：向量相似度与 BM25 分数量纲不同，直接加权需要归一化，而归一化对分数分布敏感、跨查询不稳定。RRF 只用排名不用绝对分数，无需调参即可稳定工作，是混合检索的常见默认解。
 
 > **为什么 embedding 后端要可插拔**：一是测试需要确定性、零网络依赖的假实现；二是本地 ONNX 模型与远程 API 各有适用场景（离线 vs 无本地算力），抽象一层可在不改业务代码的前提下切换；三是评测时需要对比不同 embedding 的召回差异。
+
+> **为什么索引产物不进入 Git**：`data/kb/` 是可审查的源语料，需要版本管理；`data/chroma/` 与 `data/bm25/` 是由配置和语料重建出的运行时产物，提交它们会放大仓库、制造平台兼容问题，并可能与当前 embedding 模型不一致。
 
 ---
 
