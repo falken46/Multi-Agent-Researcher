@@ -2,7 +2,7 @@
 
 > **本文档的作用**：保证简历上写的每一句话，都能在仓库里指到具体文件、在评测报告里找到数据来源、并在面试中答得出"为什么这么做"。
 >
-> 使用方式：只从 `eval/reports/comparison.md` 取已经跑出的数字。R 轨已完成；O 轨、MCP、CI 与 Docker 仍保留占位或不写进当前简历。
+> 使用方式：只从 `eval/reports/comparison.md` 取已经跑出的数字。R 轨已完成；P/Q 真实运行已转为可选。MCP Server 的代码、schema、项目配置与官方客户端 stdio 验证已完成，但 Claude Code 实际调用仍待数据出站授权；CI 与 Docker 尚未实现。
 >
 > ⚠️ **红线：占位符没填之前，这条 bullet 不许进简历。**
 
@@ -35,10 +35,10 @@
   本地知识库优先、召回不足自动降级联网；在 100 题中文公开检索集（C-MTEB/T2Reranking）上
   做四组消融，发现混合检索是权衡而非普遍收益——MRR@5 +0.0538 但官方口径 MAP@20 -0.0059，
   据此把双通道与重排都做成可切换开关并记录适用边界，而非默认启用。
-- 构建自动化评测与全链路 trace 体系，量化引用可溯源率、任务完成率、token 与成本；
-  子问题 asyncio 并行改造后端到端耗时下降 __%，单次任务平均 token 下降 __%。
-- 以 MCP Server 形式对外暴露 deep_research / kb_search 能力，可被 Claude Code 直接调用；
-  pytest 覆盖检索层与图编排共 __ 条用例，GitHub Actions CI + Docker Compose 一键部署。
+- 构建自动化评测与全链路 trace 体系，覆盖公开检索消融、P/Q 控制变量 runner、查询快照、
+  断点续跑及 token / 成本汇总；并行与 Critic 的真实效果未实测，不填写推测数字。
+- 基于官方 MCP Python SDK v2 暴露结构化 deep_research / kb_search 工具，提供项目级
+  Claude Code 配置并通过官方客户端 stdio 握手与调用测试；pytest 用例数以 README 当前实测为准。
 ```
 
 ### 2.2 金融版（4 条，换强调面）
@@ -53,8 +53,8 @@
 - 建立公开检索基准与 15 题端到端集的分轨评测流程，对四组检索配置做对照实验，
   量化每项优化的收益与代价；全链路 trace 记录逐次调用的模型、token、耗时与成本，
   任意一次输出均可审计还原。
-- 工程化交付：pytest __ 条用例、GitHub Actions CI、Docker Compose 一键部署，
-  并提供 MCP Server 接口供外部客户端调用。
+- 工程化接口：以官方 MCP SDK v2 提供 deep_research / kb_search，参数和返回均生成
+  JSON Schema，并用 stdio 客户端做协议级回归；CI 与 Docker 完成前不写入当前简历。
 ```
 
 ### 2.3 版面不足时的压缩版（2 条）
@@ -62,8 +62,8 @@
 ```
 - 基于 LangGraph 编排四类 Agent 并实现质量反思回环；自建向量 + BM25 混合检索与重排层，
   在 100 题公开检索集上做四组消融，用 MAP@20 / nDCG@5 复核并如实保留负向结论。
-- 建立评测与 trace 体系量化每项改动的效果与代价，并行改造后耗时下降 __%；
-  含 CI、Docker 与 MCP Server 接口。
+- 建立评测与 trace 体系记录检索、token、成本和行为事件，并以官方 MCP SDK v2
+  暴露完整研究与本地检索工具；未实测的并发收益以及未完成的 CI/Docker 不写入简历。
 ```
 
 ---
@@ -73,7 +73,7 @@
 | 简历表述 | 代码位置 | 数据来源 | 说不出来就不能写 |
 |----------|----------|----------|------------------|
 | 四类 Agent 编排 | `agents/graph.py`、`agents/critic.py` | — | 为什么要 Critic 独立成节点 |
-| 反思回环 + 三重保险 | `agents/graph.py::should_revise` | `EVAL.md` 反思触发率 / 增益 | 怎么防死循环 |
+| 反思回环 + 三重保险 | `agents/graph.py::should_revise` | trace revision 事件；P/Q 效果实测可选 | 怎么防死循环 |
 | 断点续跑 | `agents/graph.py` Checkpointer | — | 状态存了什么、从哪恢复 |
 | 递归切分 | `rag/splitter.py` | — | 中文切分和英文的差别 |
 | 向量 + BM25 双通道 | `rag/vectorstore.py`、`rag/bm25.py` | R1 / R2 / R3 | 为什么要两路 |
@@ -82,10 +82,10 @@
 | 指标口径修订 | `eval/metrics.py`、`EVAL.md` §3.1 | Recall@5 / nDCG@5 / MAP@20 | 首命中型指标为何会失真 |
 | 降级策略 | `agents/researcher.py` | trace `fallback` 事件 | 阈值怎么定的 |
 | 引用可溯源率 | `agents/writer.py` + `eval/metrics.py` | 对照表 | 这个指标怎么算 |
-| 并行改造 | `agents/researcher.py` | 对照表 D 组耗时 | 为什么用 asyncio 不用多线程 |
+| 并行改造 | `agents/researcher.py` | fake IO 并发边界测试；不声明真实加速数字 | 为什么用 asyncio 不用多线程 |
 | token / 成本统计 | `core/llm.py`、`core/costs.py` | trace `task_end` | 钱花在哪个节点 |
 | 评测体系 | `eval/` | `eval/reports/comparison.md` | 评测集怎么造的、有什么偏差 |
-| MCP Server | `mcp/server.py` | — | MCP 和普通 API 的区别 |
+| MCP Server | `mcp_server/server.py`、`.mcp.json`、`tests/test_mcp_server.py` | 官方客户端 stdio 握手与调用结果 | MCP 和普通 API 的区别；为什么包名不能叫 `mcp` |
 | CI / Docker | `.github/workflows/`、`Dockerfile.*` | — | CI 里为什么不放 API Key |
 
 ---
@@ -138,21 +138,21 @@
 ### 4.3 评测与成本
 
 **Q：你怎么知道优化真的有效？**
-我把评测拆成两轨。R 轨用 100 个公开 query 和 1,664 个共享 passage，R1/R2/R3/R4 分别只改变向量、BM25、RRF、rerank，确定性运行；O 轨另测并行和 Critic，不与检索混在一条因果链。
+我把评测拆成三条独立对照。R 轨用 100 个公开 query 和 1,664 个共享 passage，R1/R2/R3/R4 分别只改变向量、BM25、RRF、rerank，确定性运行；P 轨只切换并发，Q 轨只切换 Critic，不与检索混在一条因果链。
 
-更重要的是我还验证了**指标本身选得对不对**。最初三个指标全是首命中型，在多正例数据上会饱和，于是补了 Recall@5、nDCG@5 和官方口径 MAP@20 重判。补测时用同一配置重跑，旧的三列数值完全复现，确认新增指标没有改变数据基础，只是改变了能看见的东西。最后结论是混合检索和重排都没有普遍收益——这个结果对我不利，但它是真的，我把它留在了报告里。O 轨数字没跑完之前不会写进简历。
+更重要的是我还验证了**指标本身选得对不对**。最初三个指标全是首命中型，在多正例数据上会饱和，于是补了 Recall@5、nDCG@5 和官方口径 MAP@20 重判。补测时用同一配置重跑，旧的三列数值完全复现，确认新增指标没有改变数据基础，只是改变了能看见的东西。最后结论是混合检索和重排都没有普遍收益——这个结果对我不利，但它是真的，我把它留在了报告里。P/Q 真实运行已转为可选，没有 raw 就不会把并发或 Critic 数字写进简历。
 
 **Q：评测集怎么造的？有什么问题？**
-检索轨没有自己出题：从 `C-MTEB/T2Reranking` 固定抽取 100 个 query，把公开 positive 和 hard negative 合成 1,664 passage 的共享池，gold 直接来自 qrels。它避免了原来 20 个 chunk、Top20 等于全库的问题。局限是只抽了公开集子集，而且把 reranking 数据改造成共享池检索，结果不等于完整 T2Ranking 排行；O 轨的 15 题仍是自建题集，存在选择偏差，关键词覆盖也只是弱指标。
+检索轨没有自己出题：从 `C-MTEB/T2Reranking` 固定抽取 100 个 query，把公开 positive 和 hard negative 合成 1,664 passage 的共享池，gold 直接来自 qrels。它避免了原来 20 个 chunk、Top20 等于全库的问题。局限是只抽了公开集子集，而且把 reranking 数据改造成共享池检索，结果不等于完整 T2Ranking 排行；P/Q 的 15 题仍是自建题集，存在选择偏差，关键词覆盖也只是弱指标，所以真实运行被调整为可选。
 
 **Q：引用可溯源率是什么？怎么算的？**
 报告里每个引用编号，能不能在传给 Writer 的 citations 里找到对应来源。因为我把 Writer 的引用编号约束成与 citations 严格一一对应，这个指标可以完全程序化校验，不需要人工。它本质是个**防幻觉指标** —— Writer 一旦编造来源编号，这个数字立刻掉下来。
 
 **Q：一次任务成本多少？瓶颈在哪？**
-trace 里逐次调用记了 token、耗时和成本，聚合后能看到节点分布。实测 Researcher 占了大部分耗时和 token，这也是我优先做并行化而不是先优化 prompt 的原因 —— 先看数据再决定优化哪里。
+trace 里逐次调用记了 token、耗时和成本，聚合后能看到节点分布。但当前没有执行正式 P/Q 付费任务，所以不对外声称平均成本或端到端瓶颈数字；已有能力是让下一次真实运行可以从 trace 直接回答，而不是从日志估算。
 
 **Q：反思机制的代价？**
-每次返工要多跑一轮检索加两次 LLM 调用，token 明显上升。所以设了 2 轮硬上限，并且用定向补查而不是全量重查来压成本。评测报告里这项负面代价是写出来的，没有藏。
+每次返工都会增加检索与 LLM 调用，因此设了 2 轮硬上限，并且用定向补查而不是全量重查来控制成本。正式 P/Q 尚未运行，所以只说明机制代价，不虚构 token 上升百分比。
 
 ### 4.4 工程
 

@@ -91,7 +91,7 @@ def test_revision_never_exceeds_hard_limit(mocker):
 | 模块 | 测试要点 |
 |------|----------|
 | `backend/api.py` | 新增 SSE 事件类型能正确推送；异常时返回结构化错误 |
-| `mcp/server.py` | 工具注册成功；参数 schema 正确；调用返回结构符合约定 |
+| `mcp_server/server.py` | 官方客户端能发现两工具；输入/输出 JSON Schema 与 annotations 正确；非法参数在执行前拒绝；结构化调用结果、trace 事件和 stdio 启动入口符合约定 |
 
 ---
 

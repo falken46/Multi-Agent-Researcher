@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "deepresearch-agent": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "--directory",
+        "${CLAUDE_PROJECT_DIR:-.}",
+        "run",
+        "python",
+        "-m",
+        "mcp_server.server"
+      ],
+      "env": {
+        "PYTHONUTF8": "1"
+      }
+    }
+  }
+}

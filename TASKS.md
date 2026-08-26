@@ -12,8 +12,8 @@
 | 10 | 基础设施层（config / llm / trace / costs） | M1 | ✅ 已完成 |
 | 11 | RAG 检索层 | M1 | ✅ 已完成 |
 | 12 | Agent 编排升级（Critic / 并行 / Checkpoint） | M1 | ✅ 功能完成 |
-| 13 | 评测体系 | M2 | 🟨 进行中 |
-| 14 | MCP Server | M3 | ⬜ |
+| 13 | 评测体系 | M2 | ✅ 秋招功能范围已完成 |
+| 14 | MCP Server | M3 | 🟨 进行中 |
 | 15 | 工程化（Docker / CI） | M2 | ⬜ |
 | 16 | 交付物（README / 架构图 / 简历映射 / 口述稿） | M1—M3 | 🟨 部分完成 |
 
@@ -92,7 +92,7 @@
 
 - [x] 构造一个低质量场景，能观察到 Critic 打低分 → 回退 Researcher → 分数提升 → 进入 Writer
 - [x] 构造一个永远不达标的场景，验证回退次数**严格不超过** `MAX_REVISION`
-- [ ] 并行前后耗时对比有真实任务实测数据并写入 Phase 13 评测报告（Phase 12 已有 fake IO + trace latency 的确定性回归测试，但它不是对外指标）
+- [x] 并发边界由 fake IO + trace latency 确定性测试验证；真实耗时对照转为秋招后可选实验，不作为功能验收或对外指标
 - [x] 中断任务后可从 Checkpoint 恢复
 
 > ⭐ **Phase 12 完成即达 M1 可投最低线**，此时应立即执行 Phase 16 的 README 部分并推送 GitHub，不要等后续 Phase。
@@ -101,7 +101,7 @@
 
 ## Phase 13: 评测体系
 
-> 目标：产出简历上所有量化数字。详细方案见 `EVAL.md`。
+> 目标：用公开数据产出可复现的检索数字，并完成端到端评测基础设施。P/Q 真实付费运行根据秋招时间收益比转为可选，不阻塞后续功能阶段。
 
 - [x] T13.1 接入公开 `C-MTEB/T2Reranking` 检索集，并构造 15 题端到端编排集
 - [x] T13.2 用公开 positive / hard negative / qrels 生成共享 passage 池，替代人工 gold 标注
@@ -114,9 +114,12 @@
 - [x] T13.5b 报告生成器接入 P/Q raw + trace 汇总与组间差值
 - [x] T13.5c 报告对缺 `ranked_chunk_ids` 的旧 raw fail-fast，杜绝浅层数字冒充 MAP@20
 - [x] T13.6a 跑完 100 题 R1—R4，产出 400 条真实检索观测
-- [ ] T13.6b 跑完 P1/P2 并行微基准与 Q1/Q2 Critic 对照，产出真实编排数据
 - [x] T13.7a 把 R 轨关键数字回填到 `README.md` 与 `RESUME_MAPPING.md`
-- [ ] T13.7b P/Q 轨完成后回填耗时、成本、覆盖与引用数字
+
+### 秋招后可选实验
+
+- P1/P2 并行微基准与 Q1/Q2 Critic 对照的真实付费运行
+- 只在正式 P/Q raw 生成后回填耗时、成本、覆盖与引用数字；未运行前不保留占位数字
 
 ### 指标口径修订（2026-08-26）
 
@@ -130,8 +133,8 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 
 **验收标准**
 
-- 四组实验数据完整，每组指标可复现
-- 每一项优化（混合检索 / 重排 / 并行 / 反思）都有独立归因的数字
+- R1—R4 四组公开检索实验数据完整，每组指标可由结构化 raw 复现
+- P/Q runner、query cache、断点续跑与组间报告已通过离线功能测试
 - 深层指标必须来自含 `ranked_chunk_ids` 的 raw；旧格式一律 fail-fast
 - **红线**：报告中不出现任何未实际跑出的估计值
 
@@ -139,15 +142,16 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 
 ## Phase 14: MCP Server
 
-- [ ] T14.1 `mcp/server.py`：FastMCP 暴露 `deep_research` 与 `kb_search`
-- [ ] T14.2 工具描述与参数 schema 编写（面向 LLM 客户端的可读性）
-- [ ] T14.3 在 Claude Code 中实测调用成功
-- [ ] T14.4 README 补充客户端配置片段与调用截图
-- [ ] T14.5 `tests/test_mcp_server.py`
+- [x] T14.1 `mcp_server/server.py`：官方 MCP Python SDK v2 `MCPServer` 暴露 `deep_research` 与 `kb_search`
+- [x] T14.2 工具描述、参数/输出 JSON Schema 与行为 annotations（面向 LLM 客户端）
+- [ ] T14.3 在 Claude Code 中实测调用成功（官方 SDK 客户端 stdio 握手与 `kb_search` 已通过；向 Claude 发送本地工具结果需作者显式授权）
+- [x] T14.4 README 与 `.mcp.json` 补充可复制的客户端配置；截图统一留到 T16.3 Demo
+- [x] T14.5 `tests/test_mcp_server.py`
 
 **验收标准**
 
-- 在真实 MCP 客户端中能看到工具、成功调用并拿到结果
+- 官方 MCP 客户端能通过真实 stdio 子进程看到工具、调用 `kb_search` 并拿到结构化结果
+- Claude Code 实际工具调用需单独完成一次数据出站授权后的验收
 - 有可直接复制的配置示例
 
 ---

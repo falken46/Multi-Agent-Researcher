@@ -14,7 +14,7 @@
                             | HTTP + SSE
 +---------------------------v---------------------------------+
 |                     接口层 (Interface)                       |
-|   backend/api.py  FastAPI          mcp/server.py  MCP Server |
+| backend/api.py  FastAPI      mcp_server/server.py  MCP Server|
 +---------------------------+---------------------------------+
                             |
 +---------------------------v---------------------------------+
@@ -374,14 +374,24 @@ async def researcher_node(
 
 前端据此展示反思过程、定向返工、本地检索降级与 usage。SSE 传输状态，JSONL trace 留存指标，SQLite checkpoint 保存恢复点，三者职责互不替代。
 
-#### `mcp/server.py`（新增）
+#### `mcp_server/server.py`（Phase 14）
 
-基于 FastMCP 暴露两个工具：
+基于官方 MCP Python SDK v2 的 `MCPServer` 暴露两个结构化工具。项目目录使用 `mcp_server/`，不使用原草案的 `mcp/`，避免遮蔽第三方依赖包 `mcp`：
 
 | 工具 | 参数 | 返回 |
 |------|------|------|
-| `deep_research` | `topic: str` | 完整 Markdown 报告 |
-| `kb_search` | `query: str, top_n: int` | 检索结果列表 |
+| `deep_research` | `topic`、可选 `thread_id` / `resume` | Markdown 报告、状态、质量/返工摘要、trace usage 与任务 ID |
+| `kb_search` | `query`、`top_n`（1—20） | 命中、来源、排序分、独立 fallback confidence 与 trace ID |
+
+```text
+LLM 客户端 --MCP stdio--> MCPServer
+                              ├─ deep_research --> backend.streaming --> LangGraph
+                              └─ kb_search -----> tools/kb_search.py --> RAG
+```
+
+MCP 层只做协议适配、输入约束和结构化输出，不直接调用 LLM SDK，也不复制 Agent 调度或检索策略。`deep_research` 复用现有 LangGraph 流与 SQLite checkpoint；`kb_search` 经工具层访问 RAG，并在独立线程执行同步 IO。两个入口都沿用 JSONL trace。
+
+SDK v2 已将 v1 的 `FastMCP` 类更名为 `MCPServer`。服务器默认使用 stdio，项目级 `.mcp.json` 负责让 Claude Code 等客户端以 `uv run python -m mcp_server.server` 启动进程。
 
 > **为什么要做 MCP Server**：实习经历中作者是 MCP 工具的**调用方**，做 Server 才补上**生产方**视角。面试中"MCP 与普通 HTTP API 的区别"是高频问题，亲手实现过才答得清楚 —— 差异在于 MCP 面向 LLM 客户端标准化了工具描述与发现方式，并由客户端统一管理连接生命周期与权限，而普通 HTTP API 的接口契约由业务方各自定义、需要为每个客户端单独适配。
 
@@ -467,8 +477,9 @@ deepresearch-agent/
 ├── frontend/
 │   └── app.py
 │
-├── mcp/                       # 【v2 新增】
-│   └── server.py
+├── mcp_server/                # Phase 14：避免与官方 mcp 包重名
+│   ├── __init__.py
+│   └── server.py              # MCPServer + deep_research / kb_search
 │
 ├── eval/                      # 【v2 新增】评测层
 │   ├── dataset/qa.jsonl

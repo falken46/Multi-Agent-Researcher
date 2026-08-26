@@ -2,7 +2,7 @@
 
 基于 LangGraph 的工程化多智能体研究助手：本地混合检索不足时联网，Critic 定向补查，并以 SSE、SQLite Checkpoint 和任务级 JSONL trace 支撑可观测、可恢复的 Markdown 报告生成流程。
 
-> 当前代码基线已实现 Phase 10—12（M1 核心能力）；Phase 13 已完成公开数据上的 R1—R4 检索消融，并接通 P/Q 编排 runner，但尚未执行付费端到端任务。本文只填写已由结构化 raw 复算的检索数字，不提前填写质量提升率或真实任务加速比。
+> 当前代码基线已实现 Phase 10—13 的秋招功能范围；Phase 14 已接通 MCP Server、结构化工具 schema 与 stdio 客户端协议测试。P/Q 真实付费运行已转为秋招后可选实验，本文只填写由结构化 raw 复算的公开检索数字，不提前填写质量提升率或真实任务加速比。
 
 ## 核心能力
 
@@ -11,6 +11,7 @@
 - **受控并发与失败隔离**：Researcher 使用 `asyncio.gather`、`Semaphore`、超时和 `return_exceptions=True` 并发处理独立子问题。
 - **有边界的质量返工**：Critic 只让 Researcher 补查明确缺口，并通过返工上限和分数停滞检测防止死循环。
 - **可观测、可恢复**：JSONL trace 记录节点、token、估算成本、耗时、降级和返工事件；SQLite Checkpoint 通过稳定 `thread_id` 支持 API 从最近 checkpoint 恢复。
+- **HTTP + MCP 双入口**：FastAPI/SSE 面向 Web 前端，官方 MCP SDK v2 暴露 `deep_research` 与只读 `kb_search`，供 LLM 客户端发现和调用。
 - **离线可回归**：默认测试不依赖 API Key 或网络，检索测试使用确定性 fake embedding。
 
 ## 系统架构
@@ -48,6 +49,10 @@ LangGraph StateGraph ◄──────► AsyncSqliteSaver（SQLite Checkpoi
 
 Planner / Researcher / Critic / Writer
  └─ core/llm.py → 统一模型调用、重试、token 与估算成本记录
+
+LLM 客户端 → MCP stdio → mcp_server/server.py
+                         ├─ deep_research → 同一 LangGraph 工作流
+                         └─ kb_search → tools/kb_search.py → 同一 RAG 流水线
 ```
 
 图中的两类持久化职责不同：Checkpoint 保存 LangGraph 状态，用来继续未完成任务；trace 保存运行事件，用来排查问题和汇总用量，二者不能互相替代。
@@ -162,6 +167,50 @@ SSE 可能发送以下事件：
 
 评审、返工和降级事件由实际路由决定，可能不出现或重复出现。当前 SSE 传输的是节点级进度和自定义事件，不是模型 token 的逐字流式输出。
 
+## MCP Server
+
+项目使用官方 MCP Python SDK v2，以 stdio 暴露两个工具：
+
+| 工具 | 适用场景 | 主要输入 | 结构化输出 |
+|---|---|---|---|
+| `deep_research` | 需要完整研究和 Markdown 报告 | `topic`；可选 `thread_id`、`resume` | 报告、状态、质量/返工摘要、trace usage、可恢复任务 ID |
+| `kb_search` | 只查询本地知识库 | `query`、`top_n`（1—20） | 命中片段、来源、排序分、fallback confidence、trace ID |
+
+`deep_research` 可能调用 DeepSeek 和联网搜索并产生费用；`kb_search` 不调用 LLM 或 Web。两者都复用现有实现：MCP 层不会重新编排 Agent，也不会直接 import `rag/` 内部模块。
+
+仓库已提供项目级 [`.mcp.json`](.mcp.json)。在项目目录启动 Claude Code，批准该配置后可通过 `/mcp` 查看 `deep_research` 和 `kb_search`：
+
+```bash
+claude
+```
+
+如需手动添加同一 stdio Server，可执行：
+
+```bash
+claude mcp add --transport stdio --scope project deepresearch-agent -- \
+  uv --directory . run python -m mcp_server.server
+```
+
+其他支持 stdio MCP 的客户端可以使用等价配置：
+
+```json
+{
+  "mcpServers": {
+    "deepresearch-agent": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["--directory", ".", "run", "python", "-m", "mcp_server.server"]
+    }
+  }
+}
+```
+
+Server 也可以直接启动用于协议调试；该命令会等待 MCP 客户端通过 stdin/stdout 通信，并不是普通交互式 CLI：
+
+```bash
+uv run python -m mcp_server.server
+```
+
 ## 关键配置
 
 | 配置 | 作用 |
@@ -181,18 +230,19 @@ SSE 可能发送以下事件：
 当前分支全量离线回归结果为：
 
 ```text
-129 passed
+140 passed
 ```
 
-这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
+这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、MCP schema/协议入口、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
 
-| 维度 | 当前已有证据 | 现在可以得出的结论 | Phase 13 待补 |
+| 维度 | 当前已有证据 | 现在可以得出的结论 | 边界 / 可选后续 |
 |---|---|---|---|
-| 功能回归 | 129 项离线测试 | 约定的本地场景可重复通过 | 真实 LLM / 搜索端到端完成率 |
+| 功能回归 | 140 项离线测试 | 约定的本地场景可重复通过 | 真实 LLM / 搜索端到端完成率 |
 | 检索链路 | 100 题公开 qrels、1,664 passage、400 条结构化观测，六项指标 | 混合检索与重排在该基准上均未取得普遍收益 | 产品知识库外推与 reranker 模型匹配分析 |
 | 并发研究 | fake IO + P1/P2 固定任务 runner 测试 | 并发上限、配对任务和续跑边界生效 | 相同真实任务的串行 / 并行耗时对照 |
 | Critic 回环 | 确定性图场景 + Q1/Q2 runner 测试 | 返工路由与 Critic 独立开关生效 | 15 题两轮的完成率与质量变化 |
 | 成本观测 | LLM / trace 汇总测试 | token 与配置价格估算链路可追踪 | 固定评测集上的平均 token、成本和耗时 |
+| MCP 接口 | 官方 SDK 客户端进程内协议测试 + 真实 stdio 子进程握手/调用 | 两个工具可发现，schema 可读，`kb_search` 返回结构化结果 | Claude Code 发送本地工具结果前仍需作者显式授权 |
 
 Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query，将 positive 与 hard negative 合并为 1,664 个 passage 的共享池，并直接沿用公开 qrels。正式 R 轨生成 400 条结构化观测：
 
@@ -223,6 +273,7 @@ Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query
 | SQLite Checkpoint + JSONL trace | 分别处理状态恢复与事件审计 | 产生两类运行时数据，当前更适合单机演示 |
 | 统一 LLM Gateway | 集中重试、计量、价格估算和 trace | 公共入口成为需要重点测试的关键模块 |
 | 离线 fake embedding | 自动化回归不依赖网络、模型下载和 API Key | 只能验证确定性逻辑，不能代表真实检索质量 |
+| 官方 MCP SDK v2 | 用标准工具发现、JSON Schema 与 stdio transport 服务 LLM 客户端 | `deep_research` 可能产生模型/联网费用；项目包使用 `mcp_server` 避免遮蔽第三方 `mcp` |
 
 ## 目录结构
 
@@ -233,6 +284,7 @@ core/         集中配置、LLM Gateway、成本估算、trace、checkpoint
 data/kb/      Git 可追踪的本地知识库源语料
 eval/         公开检索集转换、端到端题集、指标与报告
 frontend/     Streamlit 任务进度与报告页面
+mcp_server/   MCPServer、deep_research / kb_search 与 stdio 入口
 prompts/      四个 Agent 与 LLM reranker 的 system prompt
 rag/          加载、切分、embedding、双路召回、RRF 与 rerank
 tests/        不依赖外部 API 的 pytest 回归测试
@@ -253,4 +305,6 @@ tools/        KB Search / Web Search / Web Fetch 等 IO 工具
 - 引用由工作流和 Prompt 组织，尚未实现“证据是否语义支持结论”的自动事实核验。
 - SQLite checkpoint 面向单机演示；多实例部署需要外部共享存储。
 - Streamlit 尚未提供 checkpoint 恢复 UI，当前需通过 API 恢复。
-- Phase 13 将补齐固定数据集、可归因的消融实验和可复现报告；Phase 14、15 的 MCP、Docker 与 CI 尚未实现。
+- P/Q 真实付费对照已转为秋招后可选实验，未运行就不声明并发加速或 Critic 质量收益。
+- Phase 14 的官方 MCP 客户端与 stdio 链路已验证；Claude Code 实际工具调用会把工具结果发送给外部模型，需作者显式授权后再完成。
+- Phase 15 的 Docker 与 CI 尚未实现。

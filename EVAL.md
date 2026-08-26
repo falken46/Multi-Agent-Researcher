@@ -2,6 +2,8 @@
 
 > 本文档定义评测集构造、指标定义与对照实验设计。
 > **本项目简历上出现的每一个数字，都必须能由本文档描述的流程复现。**
+>
+> 秋招功能范围以已完成的公开 R 轨实测为正式量化交付。P/Q runner、query cache、指标和报告链路保留为评测工程能力，真实付费运行转为秋招后可选实验；未运行就不声明并发加速或 Critic 质量收益。
 
 ---
 
@@ -43,7 +45,7 @@ uv run python -m eval.prepare_retrieval_dataset --queries 100 --seed 42
 
 T2Ranking 已把文本定义为 passage 检索单元，因此 R 轨不再按产品知识库的 `CHUNK_SIZE` 二次切分。一个 passage 直接对应一个检索 `Chunk` 和一个 qrels ID。
 
-### 2.2 P/Q 轨：端到端编排题集
+### 2.2 P/Q 轨：端到端编排题集（真实运行可选）
 
 `eval/dataset/orchestration_qa.jsonl` 共 15 题：本地、联网、混合各 5 题。每题包含固定子问题与 `must_cover` 同义短语组。P 轨取 5 道 KB 题比较串行/并行；Q 轨取全部 15 题比较 Critic 开/关时的完成率、覆盖、引用、耗时、token 和成本。
 
