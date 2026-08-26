@@ -2,7 +2,7 @@
 
 > **本文档的作用**：保证简历上写的每一句话，都能在仓库里指到具体文件、在评测报告里找到数据来源、并在面试中答得出"为什么这么做"。
 >
-> 使用方式：只从 `eval/reports/comparison.md` 取已经跑出的数字。R 轨已完成；P/Q 真实运行已转为可选。MCP Server 的代码、schema、项目配置与官方客户端 stdio 验证已完成，但 Claude Code 实际调用仍待数据出站授权；CI 与 Docker 尚未实现。
+> 使用方式：效果数字只从 `eval/reports/comparison.md` 取。R 轨已完成；P/Q 真实运行已转为可选。MCP Server 的代码、schema、项目配置与官方客户端 stdio 验证已完成；Phase 15 也已完成 Docker Compose 启动链和无 Key 的离线 CI 配置。本机已有 148 项离线测试、44 篇文档构建为 128 个 chunk、前后端健康检查通过等交付证据；GitHub Actions 远端绿色状态必须等作者提交并推送后再声明。
 >
 > ⚠️ **红线：占位符没填之前，这条 bullet 不许进简历。**
 
@@ -38,7 +38,8 @@
 - 构建自动化评测与全链路 trace 体系，覆盖公开检索消融、P/Q 控制变量 runner、查询快照、
   断点续跑及 token / 成本汇总；并行与 Critic 的真实效果未实测，不填写推测数字。
 - 基于官方 MCP Python SDK v2 暴露结构化 deep_research / kb_search 工具，提供项目级
-  Claude Code 配置并通过官方客户端 stdio 握手与调用测试；pytest 用例数以 README 当前实测为准。
+  Claude Code 配置并通过官方客户端 stdio 握手与调用测试；用多阶段 Docker、Compose 启动门控和
+  无 API Key 的 GitHub Actions 工作流完成交付，本机 148 项离线回归通过。
 ```
 
 ### 2.2 金融版（4 条，换强调面）
@@ -54,7 +55,8 @@
   量化每项优化的收益与代价；全链路 trace 记录逐次调用的模型、token、耗时与成本，
   任意一次输出均可审计还原。
 - 工程化接口：以官方 MCP SDK v2 提供 deep_research / kb_search，参数和返回均生成
-  JSON Schema，并用 stdio 客户端做协议级回归；CI 与 Docker 完成前不写入当前简历。
+  JSON Schema，并用 stdio 客户端做协议级回归；以多阶段 Docker、自动建库的 Compose 启动链和
+  无 API Key 的离线 CI 完成交付，本机 148 项回归通过。
 ```
 
 ### 2.3 版面不足时的压缩版（2 条）
@@ -63,7 +65,8 @@
 - 基于 LangGraph 编排四类 Agent 并实现质量反思回环；自建向量 + BM25 混合检索与重排层，
   在 100 题公开检索集上做四组消融，用 MAP@20 / nDCG@5 复核并如实保留负向结论。
 - 建立评测与 trace 体系记录检索、token、成本和行为事件，并以官方 MCP SDK v2
-  暴露完整研究与本地检索工具；未实测的并发收益以及未完成的 CI/Docker 不写入简历。
+  暴露完整研究与本地检索工具；用 Docker Compose 与离线 CI 完成交付，148 项回归通过，
+  未实测的并发收益和远端 CI 绿色状态不写入简历。
 ```
 
 ---
@@ -86,7 +89,7 @@
 | token / 成本统计 | `core/llm.py`、`core/costs.py` | trace `task_end` | 钱花在哪个节点 |
 | 评测体系 | `eval/` | `eval/reports/comparison.md` | 评测集怎么造的、有什么偏差 |
 | MCP Server | `mcp_server/server.py`、`.mcp.json`、`tests/test_mcp_server.py` | 官方客户端 stdio 握手与调用结果 | MCP 和普通 API 的区别；为什么包名不能叫 `mcp` |
-| CI / Docker | `.github/workflows/`、`Dockerfile.*` | — | CI 里为什么不放 API Key |
+| CI / Docker | `.github/workflows/ci.yml`、`Dockerfile.*`、`docker-compose.yml` | 本机 148 项离线测试；干净命名卷下 44 篇文档 → 128 chunk、双索引各 128 条、前后端健康 | 为什么 CI 不放 API Key；为什么索引器要做启动门控 |
 
 ---
 
@@ -165,8 +168,17 @@ MCP 面向 LLM 客户端标准化了工具的描述与发现方式，客户端�
 **Q：CI 里为什么不放 API Key？**
 CI 应该验证的是代码逻辑，不是外部服务可用性。所以需要真实调用的测试都打了 `live` 标记默认跳过，检索层测试用确定性的 fake embedding 后端。好处是 CI 快、稳定、且 fork 的人不用配 Key 也能跑。
 
+**Q：为什么 Docker 要用多阶段构建和非 root 用户？**
+构建阶段负责安装 `uv`、按锁文件解析依赖，运行阶段只复制虚拟环境与必要源码，避免把构建工具和下载缓存带进最终镜像；非 root 运行则把容器被利用后的权限边界收窄。代价是当前前后端仍复用完整运行依赖，两个镜像都约 324 MB。对秋招 Demo，我优先保证一个锁文件和可重复构建；如果进入生产，再拆 frontend/backend dependency group。
+
+**Q：Compose 为什么要单独放一个 indexer，而不是后端启动时顺手建库？**
+建索引是一次性初始化任务，后端是长期服务，两者生命周期不同。把 indexer 设成独立服务后，可以用“indexer 成功 → backend 启动 → `/health` 通过 → frontend 启动”的依赖链明确失败位置，也避免多个后端副本同时重建索引。当前 44 篇小语料每次启动全量重建，换取语料、切分配置与索引始终一致；代价是启动时间更长，后续数据量增大时应改成增量索引。
+
+**Q：你说做了 CI，为什么仓库还没有绿色徽章？**
+我已经完成工作流配置，并在本机跑通与 CI 完全相同的锁文件、Ruff 和 `pytest -m "not live"` 命令；但 GitHub Actions 只有在作者提交并推送后才会产生远端 run。现阶段可以说“实现了无 Key 的离线 CI”，不能说“远端 CI 已绿色”。推送后我会把具体 run 作为最终证据。
+
 **Q：这个项目最大的不足是什么？**
-评测样本量偏小，结论只能算方向性参考；覆盖率指标是关键词匹配，判断不了语义正确性；另外知识库目前不支持增量更新，改一篇文档要全量重建索引。
+公开检索只固定抽取了 T2Reranking 的 100 题子集，而且把 reranking 数据改造成共享池检索，不能外推成完整榜单结论；P/Q 没有付费实测，因此没有真实并发加速和 Critic 收益数字；知识库也还不支持增量更新，改一篇文档要全量重建索引。这三点分别限制了结论外推、端到端证据和部署规模。
 
 > 最后这题几乎必问。**准备一个真实的、有技术含量的不足**，比说"时间不够"或"没什么不足"强得多。
 
@@ -181,7 +193,7 @@ CI 应该验证的是代码逻辑，不是外部服务可用性。所以需要�
 AI 框架与 Agent：LangGraph 多智能体编排、状态机与条件边、Function / Tool Calling、
                  MCP（工具调用 + Server 开发）、结构化输出、反思与重试机制
 RAG 与检索：文档切分、Embedding、向量检索（Chroma）、BM25、RRF 混合召回、Rerank 重排、
-            检索评测（Hit@K / MRR）
+            检索评测（Candidate Recall / Recall@K / MRR / nDCG / MAP）
 工程与可观测：FastAPI、SSE 流式、Docker Compose、GitHub Actions CI、
               全链路 Trace、Token 与成本统计、固定测试集与回归验证
 ```
@@ -208,9 +220,10 @@ RAG 与检索：文档切分、Embedding、向量检索（Chroma）、BM25、RRF
 
 写进简历前逐条自查：
 
-- [ ] 每个数字都能在 `eval/reports/comparison.md` 里找到
+- [ ] 每个效果数字都能在 `eval/reports/comparison.md` 或 trace 中找到；测试数和容器证据能由对应命令复现
 - [ ] 每个技术名词在仓库里都有对应实现（不写 Milvus、不写 LangSmith）
 - [ ] 每条 bullet 都能回答"为什么这么做"和"代价是什么"
 - [ ] 不写"精通""深入理解""熟悉底层原理"
 - [ ] 不写没跑成功过的能力
+- [ ] GitHub Actions 没有真实远端 run 前，不写“CI 绿色”或放绿色徽章
 - [ ] 项目与实习的表述不重复，各自承担不同的说服职能

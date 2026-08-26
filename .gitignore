@@ -41,6 +41,7 @@ traces/
 .test-runtime/
 data/chroma/
 data/bm25/
+data/checkpoints/
 data/checkpoints.sqlite
 data/checkpoints.sqlite-wal
 data/checkpoints.sqlite-shm

@@ -7,7 +7,7 @@
 - **Python**: 3.12（项目 `.python-version` 已锁定；最低要求 3.10+）
 - **包管理**: `uv`（项目已使用，`uv.lock` 已提交）
 - **OS**: Windows / macOS / Linux
-- **Docker**: 20.10+（容器化部署）
+- **Docker**: Docker Engine 24+ / Docker Compose v2.24+（容器化部署；使用 `env_file.required` 与条件依赖）
 
 ---
 
@@ -57,6 +57,7 @@
 | `langgraph-checkpoint` | 间接依赖 | `4.2.0` | Checkpoint 基础协议与状态模型 |
 | `aiosqlite` | 间接依赖 | `0.22.1` | `AsyncSqliteSaver` 的异步 SQLite 驱动 |
 | `mcp[cli]` | `>=2.0,<3.0` | `2.1.1` | MCP v2 server/client、stdio transport、工具 schema 与本地调试 CLI |
+| `ruff` | `>=0.16.3,<1.0.0` | `0.16.4` | Phase 15 的本地与 CI lint 门禁 |
 
 > 这里记录的是锁文件事实，不把锁版本反写成业务代码判断。依赖升级后应重新生成 `uv.lock`，并先验证流式事件结构、Checkpoint 恢复与完整测试集。
 
@@ -69,7 +70,7 @@
 | pytest-asyncio | 异步测试（v2 大量使用） |
 | pytest-cov | 覆盖率统计 |
 | httpx | FastAPI 测试客户端（仅开发依赖；Phase 12 的同步检索工具通过 `asyncio.to_thread` 接入异步节点） |
-| ruff | Lint + 格式化（CI 使用） |
+| ruff | Lint（`E4` / `E7` / `E9` / `F` / `I`），本地与 CI 使用；当前锁定 `0.16.4` |
 
 ---
 
@@ -166,5 +167,34 @@ uv sync --group dev
 | chromadb | 主版本升级会改变持久化目录格式，需重建索引 |
 | fastembed | 模型名称随版本调整，锁定 `EMBEDDING_MODEL` 后不随意变更，否则历史向量库失效 |
 | mcp | v2 已把 `FastMCP` 更名为 `MCPServer`；升级前验证工具 JSON Schema、结构化输出、stdio 握手与 Claude Code 配置 |
+| ruff | 新版本可能新增或调整规则；升级后先运行 `ruff check .`，不要通过全局 ignore 掩盖真实错误 |
 
 > **重要**：更换 embedding 模型等同于让整个向量库失效，必须重建索引并重跑评测，否则评测数据不可比。
+
+---
+
+## 7. Docker 与 CI 交付约束
+
+### 7.1 镜像边界
+
+- `Dockerfile.backend` 同时服务一次性 indexer 和 FastAPI 后端；运行阶段安装 `libgomp1` 以支持 ONNX Runtime。
+- `Dockerfile.frontend` 只复制 `core/` 与 `frontend/` 源码。
+- 两个 Dockerfile 均从 `uv.lock` 执行 `uv sync --frozen --no-dev --no-install-project`，最终阶段不保留 uv 二进制和依赖下载缓存。
+- 两个运行阶段统一使用 UID/GID `10001` 的非 root 用户 `app`，并提供容器健康检查。
+
+当前 `pyproject.toml` 尚未把前后端运行依赖拆成独立组，因此两个镜像都携带完整运行依赖，实测约 324 MB。对秋招 Demo 而言，单一锁文件和低维护成本优先于进一步压缩；如果未来需要生产发布，再拆分 frontend/backend dependency group。
+
+### 7.2 Compose 启动与持久化
+
+```text
+indexer --service_completed_successfully--> backend --service_healthy--> frontend
+```
+
+`chroma-data`、`bm25-data`、`checkpoint-data`、`trace-data` 与 `model-cache` 都是命名卷。命名卷避免把运行时状态打进镜像，并规避 Linux 上宿主机自动创建 bind 目录后非 root 容器无写权限的问题。
+
+### 7.3 CI 供应链与离线边界
+
+- `actions/checkout` 与 `astral-sh/setup-uv` 固定到完整 commit SHA，降低可移动 tag 带来的供应链风险。
+- uv 固定为 `0.11.3`，依赖通过 `uv sync --frozen --group dev` 安装。
+- CI 只授予 `contents: read`，不引用 GitHub Secret。
+- 质量门禁依次运行 `ruff check .` 与 `python -m pytest -m "not live"`；后者避开 Windows 中文路径下 console-script trampoline 的兼容问题，也显式排除真实网络/付费测试。

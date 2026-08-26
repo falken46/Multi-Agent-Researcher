@@ -21,10 +21,12 @@ from eval.metrics import aggregate_retrieval_records
 from eval.models import RetrievalGroupSummary, RetrievalObservation
 from eval.retrieval_dataset import (
     DATASET_NAME,
-    DEFAULT_OUTPUT_DIR as DEFAULT_DATASET_DIR,
     PreparedRetrievalDataset,
     RetrievalCase,
     load_prepared_dataset,
+)
+from eval.retrieval_dataset import (
+    DEFAULT_OUTPUT_DIR as DEFAULT_DATASET_DIR,
 )
 from rag.bm25 import BM25Index
 from rag.embeddings import EmbeddingBackend, create_embedding_backend

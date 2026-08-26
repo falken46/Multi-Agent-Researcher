@@ -19,8 +19,9 @@
 # pyproject.toml
 [tool.pytest.ini_options]
 markers = ["live: 需要真实 API Key 与网络，CI 中跳过"]
-addopts = "-m 'not live'"
 ```
+
+标准测试不把 `-m "not live"` 固化进 `addopts`，避免开发者手动运行 live 测试时同时受到相反筛选条件影响；CI 在命令行显式执行 `python -m pytest -m "not live"`。
 
 ---
 
@@ -130,7 +131,7 @@ async def test_researcher_runs_concurrently(mocker):
 每个 Phase 结束前必须执行：
 
 ```bash
-uv run pytest
+uv run python -m pytest
 ```
 
 - v1 原有 41 条测试**必须全部通过**
@@ -143,9 +144,10 @@ uv run pytest
 
 `.github/workflows/ci.yml`：
 
-1. 使用 `uv sync --group dev` 安装依赖
-2. 先跑 `ruff check`，再跑 `pytest`
+1. 使用 `uv sync --frozen --group dev` 按锁文件安装依赖
+2. 先跑 `uv run --frozen ruff check .`，再跑 `uv run --frozen python -m pytest -m "not live"`
 3. 不注入任何 API Key（验证 CI 测试确实不依赖外部服务）
 4. 缓存 uv 依赖以缩短构建时间
+5. 第三方 Action 固定完整 commit SHA，工作流权限限制为 `contents: read`
 
 > CI 跑绿的前提是所有需要网络的测试都已正确标记为 `live`。若 CI 失败于缺少 Key，说明标记遗漏，属于测试设计问题而非 CI 配置问题。

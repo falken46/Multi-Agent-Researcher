@@ -2,7 +2,7 @@
 
 基于 LangGraph 的工程化多智能体研究助手：本地混合检索不足时联网，Critic 定向补查，并以 SSE、SQLite Checkpoint 和任务级 JSONL trace 支撑可观测、可恢复的 Markdown 报告生成流程。
 
-> 当前代码基线已实现 Phase 10—13 的秋招功能范围；Phase 14 已接通 MCP Server、结构化工具 schema 与 stdio 客户端协议测试。P/Q 真实付费运行已转为秋招后可选实验，本文只填写由结构化 raw 复算的公开检索数字，不提前填写质量提升率或真实任务加速比。
+> 当前代码基线已实现 Phase 10—15 的秋招功能范围，包括公开检索评测、MCP Server、Docker Compose 与离线 CI。P/Q 真实付费运行已转为秋招后可选实验，本文只填写由结构化 raw 复算的公开检索数字，不提前填写质量提升率或真实任务加速比。
 
 ## 核心能力
 
@@ -12,6 +12,7 @@
 - **有边界的质量返工**：Critic 只让 Researcher 补查明确缺口，并通过返工上限和分数停滞检测防止死循环。
 - **可观测、可恢复**：JSONL trace 记录节点、token、估算成本、耗时、降级和返工事件；SQLite Checkpoint 通过稳定 `thread_id` 支持 API 从最近 checkpoint 恢复。
 - **HTTP + MCP 双入口**：FastAPI/SSE 面向 Web 前端，官方 MCP SDK v2 暴露 `deep_research` 与只读 `kb_search`，供 LLM 客户端发现和调用。
+- **容器化交付与 CI**：多阶段镜像、非 root 运行、健康检查、持久化卷与自动建库组成一键启动链；GitHub Actions 使用锁文件执行 Ruff 和离线 pytest。
 - **离线可回归**：默认测试不依赖 API Key 或网络，检索测试使用确定性 fake embedding。
 
 ## 系统架构
@@ -123,6 +124,44 @@ uv run streamlit run frontend/app.py --server.address 127.0.0.1 --server.port 85
 
 浏览器打开 `http://127.0.0.1:8501`。后端健康检查为 `GET /health`，交互式接口文档位于 `http://127.0.0.1:8000/docs`。
 
+### 6. 使用 Docker Compose 一键启动
+
+先准备 `.env`，再启动整个系统：
+
+```bash
+docker compose up --build
+```
+
+Compose 会按以下顺序执行：
+
+```text
+indexer 全量构建 Chroma + BM25
+  └─ 成功后启动 backend
+       └─ /health 通过后启动 frontend
+```
+
+浏览器仍访问 `http://127.0.0.1:8501`。Chroma、BM25、SQLite checkpoint、JSONL trace 与模型缓存位于 Docker 命名卷，重建容器不会丢失；`docker compose down` 只停止并移除容器与网络，不删除这些卷。
+
+当前首版会在每次 `up` 时全量重建 44 篇小型产品知识库。这样牺牲少量启动时间，换取了索引与当前语料、切分配置始终一致，也避免额外维护一套“索引是否过期”判断逻辑。
+
+如果 Windows 上的项目绝对路径包含中文，个别 Docker Desktop / Compose Bake 版本可能在 `docker compose build` 阶段报告 `non-printable ASCII` header。可以把仓库放到纯英文路径，或用以下等价方式绕过 Compose 的 Bake 层：
+
+```bash
+docker buildx build --load -f Dockerfile.backend -t deepresearch-agent-backend:local .
+docker buildx build --load -f Dockerfile.frontend -t deepresearch-agent-frontend:local .
+docker compose up --no-build
+```
+
+### 7. 本地执行 CI 同款检查
+
+```bash
+uv sync --frozen --group dev
+uv run --frozen ruff check .
+uv run --frozen python -m pytest -m "not live"
+```
+
+GitHub Actions 在 push 与 pull request 时执行同样的质量门禁。工作流不会注入 DeepSeek、Tavily 或其他私密 Key；需要真实网络或付费服务的测试必须显式标记 `@pytest.mark.live`，并被 CI 排除。
+
 ## API、SSE 与断点恢复
 
 新任务最安全的做法是只传主题，让后端生成唯一 `thread_id`。以下命令适用于 Bash / Git Bash：
@@ -230,19 +269,20 @@ uv run python -m mcp_server.server
 当前分支全量离线回归结果为：
 
 ```text
-140 passed
+148 passed
 ```
 
-这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、MCP schema/协议入口、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
+这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、MCP schema/协议入口、Docker/Compose/CI 配置契约、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
 
 | 维度 | 当前已有证据 | 现在可以得出的结论 | 边界 / 可选后续 |
 |---|---|---|---|
-| 功能回归 | 140 项离线测试 | 约定的本地场景可重复通过 | 真实 LLM / 搜索端到端完成率 |
+| 功能回归 | 148 项离线测试 | 约定的本地场景可重复通过 | 真实 LLM / 搜索端到端完成率 |
 | 检索链路 | 100 题公开 qrels、1,664 passage、400 条结构化观测，六项指标 | 混合检索与重排在该基准上均未取得普遍收益 | 产品知识库外推与 reranker 模型匹配分析 |
 | 并发研究 | fake IO + P1/P2 固定任务 runner 测试 | 并发上限、配对任务和续跑边界生效 | 相同真实任务的串行 / 并行耗时对照 |
 | Critic 回环 | 确定性图场景 + Q1/Q2 runner 测试 | 返工路由与 Critic 独立开关生效 | 15 题两轮的完成率与质量变化 |
 | 成本观测 | LLM / trace 汇总测试 | token 与配置价格估算链路可追踪 | 固定评测集上的平均 token、成本和耗时 |
 | MCP 接口 | 官方 SDK 客户端进程内协议测试 + 真实 stdio 子进程握手/调用 | 两个工具可发现，schema 可读，`kb_search` 返回结构化结果 | Claude Code 发送本地工具结果前仍需作者显式授权 |
+| 容器交付 | 干净命名卷下 44 篇文档 → 128 chunk、Chroma / BM25 各 128 条，前后端健康 | 自动建库和启动门控链在本机可重复运行 | 真实模型任务仍属于显式 `live` smoke |
 
 Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query，将 positive 与 hard negative 合并为 1,664 个 passage 的共享池，并直接沿用公开 qrels。正式 R 轨生成 400 条结构化观测：
 
@@ -274,6 +314,8 @@ Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query
 | 统一 LLM Gateway | 集中重试、计量、价格估算和 trace | 公共入口成为需要重点测试的关键模块 |
 | 离线 fake embedding | 自动化回归不依赖网络、模型下载和 API Key | 只能验证确定性逻辑，不能代表真实检索质量 |
 | 官方 MCP SDK v2 | 用标准工具发现、JSON Schema 与 stdio transport 服务 LLM 客户端 | `deep_research` 可能产生模型/联网费用；项目包使用 `mcp_server` 避免遮蔽第三方 `mcp` |
+| 多阶段镜像 + Compose 启动门控 | 依赖锁定在构建阶段，运行阶段非 root；索引完成和后端健康后才启动下游 | 前后端当前复用完整运行依赖，镜像约 324 MB；小语料每次启动全量重建索引 |
+| Ruff + 离线 pytest CI | push / PR 自动阻止未使用导入、导入漂移和功能回归，且不需要任何 API Key | 真实联网与付费路径必须在本地以 `live` 测试或 smoke 单独验证 |
 
 ## 目录结构
 
@@ -284,6 +326,7 @@ core/         集中配置、LLM Gateway、成本估算、trace、checkpoint
 data/kb/      Git 可追踪的本地知识库源语料
 eval/         公开检索集转换、端到端题集、指标与报告
 frontend/     Streamlit 任务进度与报告页面
+.github/      push / PR 的 Ruff + 离线 pytest 工作流
 mcp_server/   MCPServer、deep_research / kb_search 与 stdio 入口
 prompts/      四个 Agent 与 LLM reranker 的 system prompt
 rag/          加载、切分、embedding、双路召回、RRF 与 rerank
@@ -297,7 +340,9 @@ tools/        KB Search / Web Search / Web Fetch 等 IO 工具
 - [`TECH_STACK.md`](TECH_STACK.md)：技术选型、配置来源和运行约束。
 - [`TASKS.md`](TASKS.md)：Phase 10—16 的实施顺序与验收标准。
 - [`EVAL.md`](EVAL.md)：Phase 13 评测设计、R 轨真实结果与 P/Q 轨执行边界。
-- [`RESUME_MAPPING.md`](RESUME_MAPPING.md)：代码证据与简历表达草案，量化占位符需等待真实评测回填。
+- [`RESUME_MAPPING.md`](RESUME_MAPPING.md)：真实证据、简历表达与高频追问的逐条映射。
+- [`INTERVIEW_GUIDE.md`](INTERVIEW_GUIDE.md)：按模块组织的中文口述稿与面试前自检。
+- [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)：作者自行执行的密钥检查、仓库重命名、推送与 GitHub 展示清单。
 
 ## 已知边界与后续路线
 
@@ -306,5 +351,5 @@ tools/        KB Search / Web Search / Web Fetch 等 IO 工具
 - SQLite checkpoint 面向单机演示；多实例部署需要外部共享存储。
 - Streamlit 尚未提供 checkpoint 恢复 UI，当前需通过 API 恢复。
 - P/Q 真实付费对照已转为秋招后可选实验，未运行就不声明并发加速或 Critic 质量收益。
-- Phase 14 的官方 MCP 客户端与 stdio 链路已验证；Claude Code 实际工具调用会把工具结果发送给外部模型，需作者显式授权后再完成。
-- Phase 15 的 Docker 与 CI 尚未实现。
+- Phase 14 的官方 MCP 客户端与 stdio 链路已验证；Claude Code 实际工具调用会把工具结果发送给外部模型，保留为作者显式授权后的可选验收。
+- Docker 镜像和 Compose 启动链已在本机验证；GitHub Actions 的绿色徽章需要作者提交并推送后由远端运行生成。

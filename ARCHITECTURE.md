@@ -395,6 +395,28 @@ SDK v2 已将 v1 的 `FastMCP` 类更名为 `MCPServer`。服务器默认使用 
 
 > **为什么要做 MCP Server**：实习经历中作者是 MCP 工具的**调用方**，做 Server 才补上**生产方**视角。面试中"MCP 与普通 HTTP API 的区别"是高频问题，亲手实现过才答得清楚 —— 差异在于 MCP 面向 LLM 客户端标准化了工具描述与发现方式，并由客户端统一管理连接生命周期与权限，而普通 HTTP API 的接口契约由业务方各自定义、需要为每个客户端单独适配。
 
+### 2.6 容器交付层（Phase 15）
+
+```text
+docker compose up --build
+  │
+  ├─ indexer（一次性容器）
+  │    ├─ data/kb（镜像内只读源语料）
+  │    ├─ Chroma ──────> chroma-data
+  │    └─ BM25 ────────> bm25-data
+  │
+  └─ indexer 成功完成
+       └─ backend（FastAPI，非 root，/health）
+            ├─ checkpoint-data
+            ├─ trace-data
+            ├─ model-cache
+            └─ 健康后启动 frontend（Streamlit，非 root）
+```
+
+一次性 indexer 不是第四个 Agent，也不参与 LangGraph 调度；它只是部署前置任务，复用 `rag.index_cli` 全量生成两套索引。Compose 用 `service_completed_successfully` 阻止后端读取半成品索引，再用 `service_healthy` 阻止前端连接尚未就绪的后端。
+
+所有运行状态放入命名卷而不是镜像层。这样镜像仍是不可变交付物，删除/重建容器不会顺带删除索引、checkpoint 和 trace。后端与前端使用多阶段构建：builder 用 uv 从锁文件创建虚拟环境，runtime 只复制虚拟环境和职责所需源码，并以 UID/GID 10001 的 `app` 用户运行。
+
 ---
 
 ## 3. 数据流：一次完整任务
@@ -428,6 +450,8 @@ deepresearch-agent/
 ├── Dockerfile.frontend
 ├── pyproject.toml / requirements.txt
 ├── .env.example
+├── .dockerignore
+├── .github/workflows/ci.yml   # Ruff + 离线 pytest
 ├── README.md
 ├── PRD.md / ARCHITECTURE.md / TECH_STACK.md / TASKS.md
 ├── TESTING.md / EVAL.md / OBSERVABILITY.md / RESUME_MAPPING.md
@@ -517,6 +541,9 @@ deepresearch-agent/
 | 9 | 配置管理 | pydantic-settings 集中管理 | 类型校验 + 单一真源，避免 `os.getenv` 散落 | 直接读环境变量：v1 的问题，无校验、易漂移 |
 | 10 | Checkpointer | LangGraph `AsyncSqliteSaver` | 适配异步图执行；稳定 `thread_id` + `None` 输入恢复，并以同步 durability 保证继续前落盘 | 纯内存：进程退出即丢失；同步 `SqliteSaver`：会阻塞异步 SSE 链路 |
 | 11 | 对外协议 | HTTP + MCP 双通道 | HTTP 面向前端，MCP 面向 LLM 客户端，覆盖两类消费者 | 仅 HTTP：错失 MCP Server 开发经验 |
+| 12 | 容器启动顺序 | 一次性 indexer + Compose 条件依赖 | 干净环境自动建两路索引，后端与前端只在上游真正就绪后启动 | 在后端启动时隐式建库：职责混杂且健康检查难解释；要求手动建库：不满足一键启动 |
+| 13 | 运行时持久化 | Docker 命名卷 | 容器可替换，索引、checkpoint、trace 与模型缓存独立保留；非 root 写权限更稳定 | 写入镜像层：容器删除即丢；宿主 bind：干净 Linux 目录可能由 root 创建并导致权限问题 |
+| 14 | CI | uv 锁文件 + Ruff + 离线 pytest | push / PR 自动阻止静态错误和功能回归，不需要 API Key | CI 跑真实 API：不稳定、产生费用且可能泄露密钥 |
 
 ---
 
