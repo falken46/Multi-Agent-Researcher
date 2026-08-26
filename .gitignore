@@ -50,3 +50,6 @@ data/checkpoints.sqlite-shm
 eval/.cache/
 eval/dataset/t2_reranking/
 eval/reports/raw/
+
+# 个人学习材料，不对外发布
+docs/study/

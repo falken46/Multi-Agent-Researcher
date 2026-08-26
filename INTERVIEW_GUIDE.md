@@ -56,7 +56,7 @@ Rerank 和召回承担不同职责：召回先保证候选不要漏，rerank 只
 
 ### 追问抓手
 
-- 数据证据：`eval/raw/retrieval/`、`eval/reports/comparison.md`。
+- 数据证据：`eval/reports/raw/`、`eval/reports/comparison.md`。
 - 方法证据：`eval/metrics.py`、`eval/retrieval_runner.py`、`eval/report.py`。
 - 局限：100 题是公开集子集；共享池改造不等于完整 T2Reranking 榜单成绩。
 
