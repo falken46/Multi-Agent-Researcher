@@ -41,7 +41,7 @@
 | **jieba** | 中文分词 | BM25 通道的前置分词，中文场景必需 |
 | **pydantic-settings** | 配置管理 | 类型校验 + `.env` 加载，替代散落的 `os.getenv` |
 | **langgraph-checkpoint-sqlite** | 断点续跑 | 已作为直接依赖接入；提供异步 `AsyncSqliteSaver`，状态按 `thread_id` 持久化 |
-| **mcp[cli]** / **fastmcp** | MCP Server | 暴露 `deep_research` / `kb_search` 工具 |
+| **mcp[cli]** | MCP Server | 官方 Python SDK v2；使用 `MCPServer` 暴露 `deep_research` / `kb_search`，CLI 用于本地 stdio 调试 |
 | **pypdf** | PDF 解析 | 知识库支持 PDF 文档 |
 
 > `onnxruntime` 由 `fastembed` 间接引入，无需显式声明。
@@ -56,6 +56,7 @@
 | `langgraph-checkpoint-sqlite` | `>=3.0.0` | `3.1.1` | Phase 12 新增的 SQLite Checkpointer 直接依赖 |
 | `langgraph-checkpoint` | 间接依赖 | `4.2.0` | Checkpoint 基础协议与状态模型 |
 | `aiosqlite` | 间接依赖 | `0.22.1` | `AsyncSqliteSaver` 的异步 SQLite 驱动 |
+| `mcp[cli]` | `>=2.0,<3.0` | `2.1.1` | MCP v2 server/client、stdio transport、工具 schema 与本地调试 CLI |
 
 > 这里记录的是锁文件事实，不把锁版本反写成业务代码判断。依赖升级后应重新生成 `uv.lock`，并先验证流式事件结构、Checkpoint 恢复与完整测试集。
 
@@ -164,5 +165,6 @@ uv sync --group dev
 | langgraph-checkpoint-sqlite | 当前锁定 `3.1.1`；升级前验证 `AsyncSqliteSaver` 生命周期、同一 `thread_id` 恢复和 `None` 输入续跑 |
 | chromadb | 主版本升级会改变持久化目录格式，需重建索引 |
 | fastembed | 模型名称随版本调整，锁定 `EMBEDDING_MODEL` 后不随意变更，否则历史向量库失效 |
+| mcp | v2 已把 `FastMCP` 更名为 `MCPServer`；升级前验证工具 JSON Schema、结构化输出、stdio 握手与 Claude Code 配置 |
 
 > **重要**：更换 embedding 模型等同于让整个向量库失效，必须重建索引并重跑评测，否则评测数据不可比。

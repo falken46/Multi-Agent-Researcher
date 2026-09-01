@@ -56,6 +56,8 @@ class BM25Index:
                     score=score,
                     channel="bm25",
                     metadata=dict(chunk.metadata),
+                    fallback_confidence=None,
+                    score_kind="bm25",
                 )
             )
             if len(results) >= top_k:

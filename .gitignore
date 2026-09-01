@@ -44,3 +44,8 @@ data/bm25/
 data/checkpoints.sqlite
 data/checkpoints.sqlite-wal
 data/checkpoints.sqlite-shm
+
+# Phase 13 evaluation runtime data
+eval/.cache/
+eval/dataset/t2_reranking/
+eval/reports/raw/

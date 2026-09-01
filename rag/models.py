@@ -36,6 +36,13 @@ class RetrievalResult:
     score: float
     channel: str
     metadata: Metadata = field(default_factory=dict)
+    fallback_confidence: float | None = None
+    score_kind: str = "unknown"
+
+    @property
+    def ranking_score(self) -> float:
+        """返回只用于候选排序的分数，保留 ``score`` 兼容旧调用方。"""
+        return self.score
 
 
 __all__ = [

@@ -27,18 +27,26 @@ def make_kb_result(
     question: str,
     *,
     score: float = 0.9,
+    fallback_confidence: float | None = None,
 ) -> KBSearchResult:
+    confidence = score if fallback_confidence is None else fallback_confidence
     return {
         "hits": [
             {
+                "chunk_id": f"chunk-{question}",
                 "text": f"{question} 本地资料",
                 "source": f"kb/{question}.md",
                 "chunk_index": 0,
+                "ranking_score": score,
                 "score": score,
+                "score_kind": "rrf",
+                "fallback_confidence": confidence,
                 "channel": "hybrid",
             }
         ],
         "max_score": score,
+        "fallback_confidence": confidence,
+        "fallback_confidence_kind": "vector_cosine_similarity",
     }
 
 
@@ -61,7 +69,7 @@ def fake_embedding_backend(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_researcher_uses_high_score_local_evidence_without_web(
+async def test_researcher_uses_high_confidence_local_evidence_without_web(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     kb_queries: list[str] = []
@@ -71,7 +79,7 @@ async def test_researcher_uses_high_score_local_evidence_without_web(
         assert top_n == 5
         assert trace_id
         kb_queries.append(query)
-        return make_kb_result(query, score=0.9)
+        return make_kb_result(query, score=0.02, fallback_confidence=0.9)
 
     def unexpected_web_search(query: str, max_results: int) -> list[SearchResult]:
         raise AssertionError(f"高分本地结果不应触发联网检索: {query}")
@@ -109,14 +117,14 @@ async def test_researcher_uses_high_score_local_evidence_without_web(
 
 
 @pytest.mark.asyncio
-async def test_researcher_falls_back_to_web_below_kb_threshold(
+async def test_researcher_falls_back_to_web_below_stable_confidence_threshold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     web_queries: list[str] = []
     captured_origins: list[str] = []
 
     def fake_kb_search(query: str, top_n: int, *, trace_id: str) -> KBSearchResult:
-        return make_kb_result(query, score=0.1)
+        return make_kb_result(query, score=0.95, fallback_confidence=0.1)
 
     def fake_web_search(query: str, max_results: int) -> list[SearchResult]:
         assert max_results == 3
@@ -145,6 +153,29 @@ async def test_researcher_falls_back_to_web_below_kb_threshold(
         "kb",
         "web",
     ]
+
+
+@pytest.mark.asyncio
+async def test_researcher_can_fail_fast_on_injected_cache_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FatalCacheError(RuntimeError):
+        pass
+
+    def fake_kb_search(query: str, top_n: int, *, trace_id: str) -> KBSearchResult:
+        return make_kb_result(query, fallback_confidence=0.0)
+
+    def failed_cached_search(query: str, max_results: int) -> list[SearchResult]:
+        raise FatalCacheError(f"cache miss: {query}")
+
+    monkeypatch.setattr(researcher_module, "kb_search", fake_kb_search)
+
+    with pytest.raises(FatalCacheError, match="cache miss"):
+        await researcher_module.researcher_node(
+            make_state(["必须缓存的问题"]),
+            web_searcher=failed_cached_search,
+            fail_fast_exceptions=(FatalCacheError,),
+        )
 
 
 @pytest.mark.asyncio

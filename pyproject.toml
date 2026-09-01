@@ -25,6 +25,7 @@ dependencies = [
     "jieba>=0.42.1",
     "pypdf>=5.0.0",
     "langgraph-checkpoint-sqlite>=3.0.0",
+    "mcp[cli]>=2.0,<3.0",
 ]
 
 [dependency-groups]

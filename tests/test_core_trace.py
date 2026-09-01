@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from core.config import clear_settings_cache
-from core.trace import emit, new_trace_id, summarize
+from core.trace import emit, new_trace_id, read_events, summarize
 
 
 def enable_trace(monkeypatch: pytest.MonkeyPatch, trace_dir: Path) -> None:
@@ -70,6 +70,11 @@ def test_emit_writes_jsonl_and_summarize_aggregates(
     assert summary["llm_calls"] == 1
     assert summary["by_node"]["planner"]["calls"] == 1
     assert summary["total_cost"] == pytest.approx(0.001)
+    assert [event["event"] for event in read_events(trace_id)] == [
+        "task_start",
+        "llm_call",
+        "task_end",
+    ]
 
 
 def test_emit_is_thread_safe(
