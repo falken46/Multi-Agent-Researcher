@@ -72,6 +72,54 @@
 | httpx | FastAPI 测试客户端（仅开发依赖；Phase 12 的同步检索工具通过 `asyncio.to_thread` 接入异步节点） |
 | ruff | Lint（`E4` / `E7` / `E9` / `F` / `I`），本地与 CI 使用；当前锁定 `0.16.4` |
 
+### 2.4 v3 变更（规划中，Phase 17—21）
+
+> 详见 `UPGRADE_V3.md`。v3 是技术栈升级，**不引入新的研究能力**。
+
+**新增**
+
+| 包名 | 用途 | 选型说明 |
+|------|------|----------|
+| **pymilvus** | Milvus 客户端 | 替换 `chromadb`。Chroma 属原型档；国内企业侧（尤其金融、政企、SI）主流是 Milvus。**诚实前提：本项目语料规模 Chroma 完全够用，换它是为技术栈对口，代价是多三个容器** |
+| **sqlalchemy** | ORM | 业务数据落库，补齐全项目零持久化的空洞 |
+| **alembic** | 数据库迁移 | `CREATE TABLE IF NOT EXISTS` 只能建新表、改不了已有表；有迁移脚本才算完整的数据库工程 |
+| **psycopg[binary]** | PostgreSQL 驱动 | |
+| **langfuse**（或 `opentelemetry-sdk` + exporter） | 可观测落地 | 二选一，待决策。`core/trace.py` 事件模型不变，只换 exporter |
+
+**移除**
+
+| 包名 | 原因 |
+|------|------|
+| chromadb | 被 Milvus 取代 |
+
+**配置字段变更**
+
+```bash
+# 移除
+CHROMA_DIR=data/chroma
+CHROMA_COLLECTION=deepresearch_kb
+
+# 新增
+MILVUS_URI=http://localhost:19530
+MILVUS_COLLECTION=deepresearch_kb
+MILVUS_TOKEN=
+DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/deepresearch
+LANGFUSE_HOST=
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_SECRET_KEY=
+TRACE_FALLBACK_DIR=traces        # exporter 未配置时的兜底
+```
+
+> 沿用既有约定：新增配置项必须同时更新三处 —— `core/config.py`、`.env.example`、本文档。
+
+**v3 升级风险**
+
+| 依赖 | 风险点 |
+|------|--------|
+| pymilvus | 主版本升级会改变 collection schema 与索引参数，需重建索引 |
+| alembic | 迁移脚本一旦执行过就不能改写，只能追加新迁移 |
+| **迁移顺序** | **必须先换向量库（保持旧语料）再换语料** —— 两个一起换，出了差异分不清是适配器 bug 还是语料变化。见 `UPGRADE_V3.md` §4.2 |
+
 ---
 
 ## 3. 外部服务

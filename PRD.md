@@ -3,6 +3,10 @@
 > 版本：v2.0
 > 上一版：v1.0（Planner → Researcher → Writer 三角色 Web 检索助手，已完成 Phase 0—9）
 > 建议 GitHub 仓库名：`deepresearch-agent`
+>
+> **📌 v3 规划中（2026-09-08 起）**：技术栈升级，不增加研究能力。
+> 向量库 Chroma → Milvus、知识库换真实语料、新增 PostgreSQL 业务落库、可观测 exporter。
+> **本文档描述的 v2 功能范围在 v3 中全部保留**，变更说明见 `UPGRADE_V3.md`，任务在 `TASKS.md` Phase 17—21。
 
 ---
 

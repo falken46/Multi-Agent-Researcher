@@ -53,3 +53,18 @@ eval/reports/raw/
 
 # 个人学习材料，不对外发布
 docs/study/
+
+# 本地学习手册站点（与 docs/study 同属个人材料，不对外发布）
+docs/index.html
+docs/_sidebar.md
+docs/_coverpage.md
+docs/_404.md
+docs/README.md
+docs/.nojekyll
+docs/vendor/
+打开学习手册.bat
+
+# Milvus Lite 本地索引（运行时产物）
+data/milvus_lite.db
+data/milvus_lite.db.*
+*.db.lock

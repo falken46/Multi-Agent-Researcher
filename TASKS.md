@@ -1,7 +1,9 @@
-# DeepResearch Agent - 任务拆解清单 (v2)
+# DeepResearch Agent - 任务拆解清单 (v2 / v3)
 
 > Phase 0—9 为 v1，已全部完成（详见 git 历史）。
-> v2 从 Phase 10 开始。每个 Phase 完成后暂停验收，并单独 commit。
+> v2 为 Phase 10—16，已完成。
+> **v3 从 Phase 17 开始，变更说明见 `UPGRADE_V3.md`。**
+> 每个 Phase 完成后暂停验收，并单独 commit。
 
 ---
 
@@ -16,12 +18,19 @@
 | 14 | MCP Server | M3 | ✅ 功能完成 |
 | 15 | 工程化（Docker / CI） | M2 | ✅ 功能完成 |
 | 16 | 交付物（README / 架构图 / 简历映射 / 口述稿） | M1—M3 | 🟨 部分完成 |
+| 17 | 向量库迁移 Chroma → Milvus | M4 | 🟨 代码完成（compose 待补） |
+| 18 | 知识库语料替换与评测重跑 | M4 | ⬜ 未开始 |
+| 19 | 关系数据库层（PostgreSQL / SQLAlchemy / Alembic） | M4 | ⬜ 未开始 |
+| 20 | 可观测 exporter + BM25 增量 + 接口鉴权 | M5 | ⬜ 未开始 |
+| 21 | fork 基线冻结与交付物更新 | M4—M5 | ⬜ 未开始 |
 
 **里程碑定义**
 
 - **M1 可投最低线**：Phase 10—12 + Phase 16 的 README 部分完成 → GitHub 上线，简历可挂链接
 - **M2 完整线**：+ Phase 13、15 → 有评测数据与工程化证据
 - **M3 加分线**：+ Phase 14 → MCP Server 与 Demo 录制
+- **M4 技术栈对口线（v3）**：+ Phase 17—19、21 → 企业档向量库、真实语料、关系数据库落库，并冻结出金融版的 fork 基线
+- **M5 工程完备线（v3）**：+ Phase 20 → 集中式可观测、增量索引、接口鉴权
 
 ---
 
@@ -189,6 +198,117 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 - README 在不看代码的前提下能让人明白系统做什么、怎么做、效果如何
 - 每条简历 bullet 都能在仓库中指到具体文件
 - 口述稿覆盖 `RESUME_MAPPING.md` 中列出的全部面试问题
+
+---
+
+# v3（Phase 17 起）
+
+> 变更说明与决策留档见 `UPGRADE_V3.md`。v3 是**技术栈升级，不增加研究能力**。
+> Phase 17—19 产出的基础设施同时是金融版（合规审查 Agent）的 fork 基线，只做一次。
+
+## Phase 17: 向量库迁移 Chroma → Milvus
+
+> 目标：把向量存储从原型档换到企业档，同时**验证 v2 当初留下的窄接口设计**。
+> **本 Phase 不换语料** —— 控制变量，见 `UPGRADE_V3.md` §4.2。
+
+- [x] T17.0 记录基线：`pytest --collect-only` 数量、全量通过情况，填入 `UPGRADE_V3.md` §7
+- [ ] T17.1 `docker-compose.yml` 增加 milvus + etcd + minio 三个服务，配 healthcheck
+- [x] T17.2 `rag/vectorstore.py` 新增 `MilvusVectorStore`，方法签名与 `ChromaVectorStore` 完全一致（`add` / `query` / `count`）
+- [x] T17.3 `core/config.py`：`chroma_dir` / `chroma_collection` → `milvus_uri` / `milvus_collection`，同步更新 `.env.example` 与 `TECH_STACK.md`
+- [x] T17.4 `rag/pipeline.py:74`、`:157` 两处实例化改用新实现
+- [x] T17.5 `eval/retrieval_runner.py` 五处引用适配
+- [x] T17.6 测试适配：`tests/test_core_config.py`、`tests/test_rag_pipeline.py`；补 Milvus collection/schema/index 相关用例
+- [x] T17.7 提供 Milvus Lite（或 fake）替身，保证 CI 不起完整 Milvus 仍能跑
+- [x] T17.8 用**原语料**重建索引，跑一遍 R 轨（R1/R2/R3 实跑，18 项指标与 Chroma 记录一致；R4 未跑，仅重排同一候选集）
+
+**验收标准**
+
+- **`rag/hybrid.py` 与 `rag/rerank.py` 一行未改**，其现有测试全绿 ← 本 Phase 最重要的验收信号
+- T17.8 的 R 轨结果与 v2 Chroma 版**基本一致**；不一致先查适配器，不得直接进入 Phase 18
+- 离线可跑不变：`EMBEDDING_BACKEND=fake` 时不下载模型、不发网络请求
+- 基线测试数量的增减去向说得清
+
+---
+
+## Phase 18: 知识库语料替换与评测重跑
+
+> 目标：修掉"深度研究系统检索自己的架构文档"这个硬伤。
+> **本 Phase 不动代码**，只换数据与重跑评测。
+
+- [ ] T18.1 确定语料方向并落地下载（🔶 **阻塞决策**，见 `UPGRADE_V3.md` §8）
+- [ ] T18.2 建立来源清单：每篇记录标题、来源 URL、获取日期
+- [ ] T18.3 归档旧 `data/kb/` 44 篇（**不删**，作为 v2 评测的可复现材料保留）
+- [ ] T18.4 重建向量索引与 BM25 索引，记录文档数与 chunk 数
+- [ ] T18.5 R 轨标注集适配新语料
+- [ ] T18.6 重跑四组消融，产出与 `eval/reports/comparison.md` 同格式的新对照表
+- [ ] T18.7 撰写新旧结论的异同说明：哪些结论迁移过来仍成立，哪些变了，为什么
+
+**验收标准**
+
+- 新语料的四组对照表产出，**负向结果照实保留**
+- v2 的 C-MTEB 结论与指标口径讨论**原样保留**，与新结论并列呈现，讲成"公开基准验证方法 → 垂直语料验证迁移"两段
+- README 里不再出现"知识库是本项目自己的文档"这一事实
+
+---
+
+## Phase 19: 关系数据库层
+
+> 目标：补齐全项目零业务数据持久化这个空洞。
+> 本 Phase 产出的 SQLAlchemy / Alembic / session / repository 骨架，是金融版直接继承的部分。
+
+- [ ] T19.1 `docker-compose.yml` 增加 postgres 服务 + healthcheck，backend 加 `depends_on: service_healthy`
+- [ ] T19.2 `db/models.py`：`research_tasks` / `reports` / `citations` / `sub_questions` 四张表（列定义见 `UPGRADE_V3.md` §4.3）
+- [ ] T19.3 `db/migrations/`：Alembic 初始化 + 首个迁移
+- [ ] T19.4 `db/repository.py`：固定模板的数据访问层，**模型不生成 SQL**
+- [ ] T19.5 图运行结束后落库：任务、报告、子问题、引用（含 `retrieval_score` 与 `rank`）
+- [ ] T19.6 db 层测试：CRUD、级联、事务回滚、`alembic upgrade head` 从空库建全表
+- [ ] T19.7 CI 增加 PostgreSQL service container
+
+**验收标准**
+
+- 跑一次 `/research` 后，能从数据库查到完整链路：问题 → 子问题 → 引用来源及其检索分数与名次 → 报告
+- `alembic upgrade head` / `downgrade` 双向可用
+- 未配置 `DATABASE_URL` 时，系统仍能运行（落库降级为跳过并告警），保住离线可跑
+
+---
+
+## Phase 20: 可观测 exporter + BM25 增量 + 接口鉴权
+
+> 目标：工程完备度补齐。三项互相独立，可分开验收、可按时间砍。
+
+- [ ] T20.1 `core/trace.py` 接 Langfuse 或 OTel exporter（🔶 待决策），**事件模型不变**
+- [ ] T20.2 本地 JSONL 保留为 fallback，未配置 exporter 时完全离线可跑
+- [ ] T20.3 trace 视图截图放进 README
+- [ ] T20.4 `rag/bm25.py` 支持增量追加，不再全量覆盖重建
+- [ ] T20.5 `backend/api.py` 扩到任务生命周期接口（发起 / 查询 / 流式 / 取报告）
+- [ ] T20.6 API Key 鉴权，调用主体写入 trace 事件与 `research_tasks`
+
+**验收标准**
+
+- 换 exporter 后业务代码零改动
+- 增量追加一篇文档后，索引条数正确且原有条目未丢失
+- 无 API Key 请求返回 401
+
+---
+
+## Phase 21: fork 基线冻结与交付物更新
+
+> 目标：把 Phase 17—19 的成果冻结成金融版的分叉点，并更新全部对外材料。
+
+- [ ] T21.1 Phase 19 完成后打 tag（建议 `v3-fork-base`），作为合规审查 Agent 的分叉基线
+- [ ] T21.2 分叉出合规版仓库，其 README 写明 fork 来源与迁移范围（**血缘声明，见 `UPGRADE_V3.md` §3.1**）
+- [ ] T21.3 更新本项目 `README.md`：Milvus、新语料、数据库、新旧评测对照
+- [ ] T21.4 更新 `ARCHITECTURE.md`：向量库与持久化两处
+- [ ] T21.5 更新 `TECH_STACK.md` v3 依赖变更
+- [ ] T21.6 更新 `RESUME_MAPPING.md`：新增 bullet 需指到文件与数据来源；**不得与合规版重复声明同一份工作量**
+- [ ] T21.7 更新 `INTERVIEW_GUIDE.md`：补 Milvus 选型、控制变量迁移顺序、数据表设计、两个项目血缘关系的答法
+- [ ] T21.8 仓库改名 `deepresearch-agent`（`RELEASE_CHECKLIST.md` 已备好）
+
+**验收标准**
+
+- 两个仓库的 README 都能说清彼此关系，且无重复计工作量
+- `UPGRADE_V3.md` §7 基线表填完，测试增减去向有交代
+- 面试口述稿能回答："这两个项目是什么关系？"
 
 ---
 

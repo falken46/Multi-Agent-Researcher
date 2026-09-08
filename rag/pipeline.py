@@ -16,7 +16,7 @@ from rag.loader import LoadFailure, load_directory
 from rag.models import RetrievalResult
 from rag.rerank import rerank
 from rag.splitter import split_documents
-from rag.vectorstore import ChromaVectorStore
+from rag.vectorstore import create_vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +71,7 @@ def build_index(
             embeddings = embedding_backend.embed_documents(
                 [chunk.text for chunk in chunks]
             )
-            vector_store = ChromaVectorStore(
-                current.chroma_dir,
-                collection_name=current.chroma_collection,
-                reset=True,
-            )
+            vector_store = create_vector_store(current, reset=True)
             vector_store.add(chunks, embeddings)
             vector_count = vector_store.count()
         except Exception as exc:
@@ -154,10 +150,7 @@ def search_with_diagnostics(
     if current.vector_search_enabled:
         try:
             embedding_backend = create_embedding_backend(current)
-            vector_store = ChromaVectorStore(
-                current.chroma_dir,
-                collection_name=current.chroma_collection,
-            )
+            vector_store = create_vector_store(current)
             channel_results["vector"] = vector_store.query(
                 embedding_backend.embed_query(normalized_query),
                 top_k=current.retrieval_top_k,

@@ -41,6 +41,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,  # 允许按字段名构造，供带 alias 的字段在测试中直接传参
     )
 
     # LLM
@@ -65,8 +66,21 @@ class Settings(BaseSettings):
     embedding_remote_url: str = ""
     embedding_api_key: SecretStr = SecretStr("")
     embedding_timeout: float = Field(default=30.0, gt=0)
+    # 向量库后端。保留 chroma 是为了 Phase 17 的 A/B 对照，不是历史包袱。
+    vector_backend: Literal["chroma", "milvus"] = "chroma"
     chroma_dir: Path = Path("data/chroma")
     chroma_collection: str = "deepresearch_kb"
+    # ⚠️ 环境变量刻意叫 MILVUS_ENDPOINT 而不是 MILVUS_URI：
+    # pymilvus 自己在 import 时就会读 os.getenv("MILVUS_URI")（见 pymilvus/settings.py），
+    # 并强制按 http[s]://host:port 解析。我们要支持 Milvus Lite 的本地文件路径，
+    # 用同名变量会在 import pymilvus 阶段直接抛 ConnectionConfigException。
+    # 两种形态都支持：http://host:19530（独立服务）或 data/milvus_lite.db（Lite 本地文件）
+    milvus_uri: str = Field(
+        default="http://localhost:19530",
+        validation_alias="MILVUS_ENDPOINT",
+    )
+    milvus_collection: str = "deepresearch_kb"
+    milvus_token: SecretStr = SecretStr("")
     bm25_index_path: Path = Path("data/bm25/index.pkl")
     kb_dir: Path = Path("data/kb")
     chunk_size: int = Field(default=500, gt=0)
@@ -104,6 +118,10 @@ class Settings(BaseSettings):
             raise ValueError("MODEL_NAME must not be empty")
         if not self.chroma_collection.strip():
             raise ValueError("CHROMA_COLLECTION must not be empty")
+        if not self.milvus_collection.strip():
+            raise ValueError("MILVUS_COLLECTION must not be empty")
+        if self.vector_backend == "milvus" and not self.milvus_uri.strip():
+            raise ValueError("MILVUS_URI must not be empty when VECTOR_BACKEND=milvus")
         if not self.embedding_model.strip():
             raise ValueError("EMBEDDING_MODEL must not be empty")
         if not self.rerank_model.strip():
