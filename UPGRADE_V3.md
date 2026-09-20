@@ -295,8 +295,8 @@ CI 的 `database` job（真实 PostgreSQL）。
 
 | 项 | 数值 | 增减去向 |
 |---|---|---|
-| 测试总数 | **208** | +35：OTel 12、BM25 增量 8、接口/鉴权/任务生命周期 15；原有测试一项未删 |
-| `pytest -m "not live"` | **208 passed** | |
+| 测试总数 | **210** | +37：OTel 12、BM25 增量 8、接口/鉴权/前端凭据/任务生命周期 17；原有测试一项未删 |
+| `pytest -m "not live"` | **210 passed** | |
 | `ruff check .` | All checks passed | |
 | `rag/hybrid.py` / `rag/rerank.py` / `agents/*` | **0 处改动** | 三轮改造都没侵入编排与融合层 |
 
@@ -321,6 +321,13 @@ CI 的 `database` job（真实 PostgreSQL）。
 ⚠️ **验证边界**：OTel 那 12 项测试用官方 `InMemorySpanExporter` 走真实 SDK 读回 span，
 验证的是 span 树建对了；**没有验证真实 Laminar / Langfuse 能否收下这些 span**，
 看板截图（T20.3）也尚未产出。这两条不能声称已完成。
+
+**v3 Compose 实跑证据（2026-09-20）**：PostgreSQL 容器完成
+`40757e97742d → 1264da85e19c` 两版迁移；indexer 输出 44 篇、128 chunk、
+Milvus 128、BM25 128；backend 与 frontend 均 healthy，宿主机 `/health`、
+`/_stcore/health` 和 `/tasks` 均返回 200。当前 `.env` 未启用 API 鉴权，且没有发起
+真实付费研究，因此这两项不在本轮容器证据内。实跑同时修复了 Docker Hub MinIO
+镜像地址失效，以及后端镜像漏复制 `alembic.ini` / `db/` 两个静态检查未发现的问题。
 
 ### 7.5 Phase 17 的 A/B 对照结果（T17.8）
 

@@ -26,6 +26,7 @@ def test_settings_load_and_validate_environment(
     monkeypatch.setenv("LLM_TIMEOUT", "12.5")
     monkeypatch.setenv("MAX_RETRY", "4")
     monkeypatch.setenv("TRACE_ENABLED", "false")
+    monkeypatch.setenv("FRONTEND_API_KEY", "frontend-secret")
     clear_settings_cache()
 
     settings = get_settings()
@@ -33,6 +34,7 @@ def test_settings_load_and_validate_environment(
     assert settings.llm_timeout == 12.5
     assert settings.max_retry == 4
     assert settings.trace_enabled is False
+    assert settings.frontend_api_key.get_secret_value() == "frontend-secret"
 
 
 def test_settings_reject_invalid_chunk_configuration() -> None:

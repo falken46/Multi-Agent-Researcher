@@ -20,6 +20,8 @@ def test_backend_dockerfile_is_multi_stage_and_non_root() -> None:
     assert "USER app" in dockerfile
     assert "backend.api:app" in dockerfile
     assert "HEALTHCHECK" in dockerfile
+    assert "COPY --chown=app:app alembic.ini ./alembic.ini" in dockerfile
+    assert "COPY --chown=app:app db ./db" in dockerfile
 
 
 def test_frontend_dockerfile_is_multi_stage_and_non_root() -> None:
@@ -37,10 +39,12 @@ def test_compose_orders_index_backend_and_frontend() -> None:
     compose = _read("docker-compose.yml")
 
     assert "indexer:" in compose
+    assert "quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z" in compose
     assert 'command: ["python", "-m", "rag.index_cli"' in compose
     assert "condition: service_completed_successfully" in compose
     assert "condition: service_healthy" in compose
     assert "BACKEND_URL: http://backend:8000" in compose
+    assert "FRONTEND_API_KEY: ${FRONTEND_API_KEY:-}" in compose
 
 
 def test_compose_limits_secrets_to_services_that_need_them() -> None:

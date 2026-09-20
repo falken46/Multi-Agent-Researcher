@@ -108,6 +108,8 @@ MILVUS_ENDPOINT=http://localhost:19530
 MILVUS_COLLECTION=deepresearch_kb
 MILVUS_TOKEN=
 DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/deepresearch
+API_KEYS=                             # key1:actor1,key2:actor2；留空关闭鉴权
+FRONTEND_API_KEY=                    # Streamlit 使用的单个 key，须命中 API_KEYS
 OTEL_ENDPOINT=                        # 留空 = 只写本地 JSONL
 OTEL_SERVICE_NAME=deepresearch-agent
 OTEL_HEADERS=                         # 形如 Authorization=Bearer xxx
@@ -193,6 +195,7 @@ TRACE_ENABLED=true
 
 # ---- 前端 ----
 BACKEND_URL=http://127.0.0.1:8000
+FRONTEND_API_KEY=
 ```
 
 > `.env.example` 需与本节保持同步。新增配置项必须同时更新三处：`core/config.py`、`.env.example`、本文档。
@@ -234,8 +237,10 @@ uv sync --group dev
 
 ### 7.1 镜像边界
 
-- `Dockerfile.backend` 同时服务一次性 indexer 和 FastAPI 后端；运行阶段安装 `libgomp1` 以支持 ONNX Runtime。
+- `Dockerfile.backend` 同时服务一次性 indexer、Alembic migrate 和 FastAPI 后端；运行阶段安装 `libgomp1` 以支持 ONNX Runtime，并显式复制 `alembic.ini` 与 `db/`。新增运行时包后必须同步镜像复制清单。
 - `Dockerfile.frontend` 只复制 `core/` 与 `frontend/` 源码。
+- Compose 只向前端注入 `FRONTEND_API_KEY`，不把后端完整的 `API_KEYS` 主体映射暴露给前端容器。
+- MinIO 使用官方 Quay 镜像 `quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z`；Docker Hub 的同标签已无法拉取，真实 Compose 验收时已修正。
 - 两个 Dockerfile 均从 `uv.lock` 执行 `uv sync --frozen --no-dev --no-install-project`，最终阶段不保留 uv 二进制和依赖下载缓存。
 - 两个运行阶段统一使用 UID/GID `10001` 的非 root 用户 `app`，并提供容器健康检查。
 

@@ -20,7 +20,7 @@
 其简历映射见 `实习材料/证券合规审查Agent/RESUME_MAPPING.md`。
 
 > 🔴 **红线：两个项目不得重复声明同一份工作量。**
-> 例如"208 项离线测试""C-MTEB 四组消融"是**本项目**的成果，合规版只能声明它自己新增的部分，
+> 例如"210 项离线测试""C-MTEB 四组消融"是**本项目**的成果，合规版只能声明它自己新增的部分，
 > 并在 README 中写明 fork 来源与迁移范围。两个仓库的 commit 历史、代码结构与相似度藏不住，
 > 假装它们无关一戳就破；主动说出血缘反而是方法复用能力的证明。
 
@@ -49,7 +49,7 @@
   并把落库设计成可关闭（未配置连接串则整层跳过），保住无外部依赖的离线回归。
 - 基于官方 MCP Python SDK v2 暴露结构化 deep_research / kb_search 工具，提供项目级
   Claude Code 配置并通过官方客户端 stdio 握手与调用测试；用多阶段 Docker、Compose 启动门控和
-  无 API Key 的 GitHub Actions 工作流完成交付，本机 208 项离线回归通过。
+  无 API Key 的 GitHub Actions 工作流完成交付，本机 210 项离线回归通过。
 - 基于 OpenTelemetry 标准把事件流导出为带父子关系的 span（任务为根、Agent 节点为子、
   模型调用与降级为 span event），后端可指向任意 OTLP 接收端而无需改代码；
   本地 JSONL 保持为主路径，未配置 endpoint 时完全不介入。
@@ -98,7 +98,7 @@
 | 数据库迁移 | `db/migrations/`、`alembic.ini` | 从空库 `upgrade head` 建全表、`downgrade base` 退回 | 为什么不用 create_all 当迁移方案 |
 | OTel 导出 | `core/otel.py`、`tests/test_core_otel.py` | 12 项测试用官方 `InMemorySpanExporter` 走真实 SDK 读回 span | 事件流怎么映射成 span 树；为什么要显式指定父 span；**真实后端未连过，不能说"我用过 Langfuse"** |
 | 增量关键词索引 | `rag/bm25.py::extend`、`tests/test_rag_bm25_incremental.py` | 8 项测试，含"增量与全量重建等价"及分词次数断言 | 为什么引擎必须重建、能省的只是分词 |
-| 接口鉴权、调用主体与任务生命周期 | `backend/auth.py`、`backend/api.py`、`backend/streaming.py` | 15 项测试（401 / 404 / 503、actor 落库、`running/completed/failed`、恢复幂等） | 鉴权解决的是可观测不是安全；为什么失败任务也必须落库 |
+| 接口鉴权、调用主体与任务生命周期 | `backend/auth.py`、`backend/api.py`、`backend/streaming.py`、`frontend/app.py` | 17 项测试（401 / 404 / 503、前端请求头与 401 提示、actor 落库、`running/completed/failed`、恢复幂等） | 鉴权解决的是可观测不是安全；为什么前端只拿单个 key；为什么失败任务也必须落库 |
 | RRF 融合 | `rag/hybrid.py` | R3 相对 R1 / R2 | 为什么不用加权求和 |
 | Rerank 重排 | `rag/rerank.py` | R4 相对 R3（MAP@20 -0.0004，未观察到收益） | 重排和召回的区别 |
 | 指标口径修订 | `eval/metrics.py`、`EVAL.md` §3.1 | Recall@5 / nDCG@5 / MAP@20 | 首命中型指标为何会失真 |
@@ -108,7 +108,7 @@
 | token / 成本统计 | `core/llm.py`、`core/costs.py` | trace `task_end` | 钱花在哪个节点 |
 | 评测体系 | `eval/` | `eval/reports/comparison.md` | 评测集怎么造的、有什么偏差 |
 | MCP Server | `mcp_server/server.py`、`.mcp.json`、`tests/test_mcp_server.py` | 官方客户端 stdio 握手与调用结果 | MCP 和普通 API 的区别；为什么包名不能叫 `mcp` |
-| CI / Docker | `.github/workflows/ci.yml`、`Dockerfile.*`、`docker-compose.yml` | 本机 208 项离线测试；容器交付证据为 **Chroma 时期**（44 篇 → 128 chunk、双索引各 128 条、前后端健康），含 Milvus/PostgreSQL 的新启动链只过了 `docker compose config`，**未实跑** | 为什么 CI 不放 API Key；为什么索引器要做启动门控；为什么迁移是独立的一次性服务 |
+| CI / Docker | `.github/workflows/ci.yml`、`Dockerfile.*`、`docker-compose.yml` | 本机 210 项离线测试；v3 Compose 实跑完成 PostgreSQL 两版迁移、44 篇 → 128 chunk、Milvus/BM25 各 128、前后端 healthy + HTTP 200 | 为什么 CI 不放 API Key；为什么索引器要做启动门控；为什么迁移是独立的一次性服务；为什么中文路径要绕过 Bake |
 
 ---
 
@@ -264,5 +264,5 @@ RAG 与检索：文档切分、Embedding、向量检索（Milvus / Chroma）、B
 - [ ] GitHub Actions 没有真实远端 run 前，不写“CI 绿色”或放绿色徽章
 - [ ] 项目与实习的表述不重复，各自承担不同的说服职能
 - [ ] **本项目与合规审查 Agent 不重复声明同一份工作量**；合规版 README 写明 fork 来源与迁移范围
-- [ ] 容器交付证据仍是 Chroma 时期的；含 Milvus / PostgreSQL 的新启动链未实跑前不声明已验证
-- [ ] 真实 PostgreSQL 上的验证由 CI `database` job 承担，远端未跑过之前不声明已通过
+- [x] v3 Compose 本机启动链已验证：PostgreSQL 迁移、Milvus/BM25 建库、前后端健康均有真实日志
+- [ ] 本机已验证真实 PostgreSQL 迁移与查询入口；同一套 db 测试的远端 CI 尚未运行，不声明 CI 已通过

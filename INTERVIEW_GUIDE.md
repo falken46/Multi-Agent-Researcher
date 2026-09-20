@@ -86,7 +86,7 @@ checkpoint 与 trace 解决的是两个不同问题：checkpoint 保存图运行
 
 交付层有 backend、frontend 两个多阶段镜像，都按 `uv.lock` 安装依赖并以非 root 用户运行。Compose 另外定义一次性 indexer：先把 44 篇产品知识库构建成 128 个 chunk，确认向量索引与 BM25 各 128 条后再启动 backend；后端 `/health` 通过后才启动 frontend。索引、checkpoint、trace 和模型缓存都放命名卷。这样初始化失败会在正确阶段暴露，也避免服务在半成品索引上接流量。
 
-CI 在 push 和 pull request 上执行锁文件同步、Ruff 与 `pytest -m "not live"`，不注入任何 API Key。真实网络能力不是靠普通 CI 验证，而是单独的 `live` smoke。本机同款命令目前是 208 项离线测试通过。Docker 干净命名卷启动链和两个健康检查是 **Chroma 时期**验证的；加入 Milvus、PostgreSQL 与迁移服务后的新启动链目前只过了 `docker compose config`，**还没实跑过**，这个边界我会讲清楚。远端 GitHub Actions 要等我提交推送后才能说绿色，这个边界我会明确保留。
+CI 在 push 和 pull request 上执行锁文件同步、Ruff 与 `pytest -m "not live"`，不注入任何 API Key。真实网络能力不是靠普通 CI 验证，而是单独的 `live` smoke。本机同款命令目前是 210 项离线测试通过。v3 Docker 链已经真实跑通：PostgreSQL 完成两版 Alembic 迁移，44 篇文档构建为 128 个 chunk，Milvus 与 BM25 各 128 条，backend / frontend 均 healthy 且 HTTP 200。这个结论仍不包含真实付费研究或鉴权开启态；远端 GitHub Actions 要等提交推送后才能说绿色。
 
 ### 追问抓手
 
@@ -109,7 +109,7 @@ v3 做了两件补短板的事，都不增加新功能。
 - **迁移踩了三个坑**：① Milvus 在 COSINE 下返回的 `distance` 就是相似度，Chroma 返回的是距离，照抄换算会把排序倒过来且不报错；② 新连接里集合是 released 状态，search 前要 `load_collection()`，这个坑单元测试抓不到、是 A/B 对照抓出来的；③ 环境变量 `MILVUS_URI` 和 pymilvus 自己撞名，改成了 `MILVUS_ENDPOINT`。
 - **为什么加 Alembic 不只是建表**：`create_all` 只能建新表、改不了已有表，拿它当迁移方案第一次改字段就卡住。
 - **落库失败怎么办**：fail-open，只告警不打断。但这是场景决定的——同一层放到合规审查场景就该做成 fail-closed，一份没留痕的结论比报错危险得多。
-- **边界**：数据库层目前在 SQLite 上验证；真实 PostgreSQL 由 CI 的独立 job 跑，远端没绿之前不声明通过。
+- **边界**：本机真实 PostgreSQL 已验证迁移、连接与任务列表查询；完整 db 测试套件在 PostgreSQL 上的自动回归仍由 CI 独立 job 承担，远端没绿之前不声明 CI 通过。
 
 ## 7. 一分钟：项目与实习如何互补
 
@@ -155,6 +155,6 @@ R 轨只有公开集的 100 题子集，P/Q 没有正式付费 raw，知识库�
 - 能不看文档说出 RRF 的正负结果：MRR@5 `+0.0538`，nDCG@5 `+0.0105`，MAP@20 `-0.0059`。
 - 能解释为什么多正例数据不能只看 Hit@5 / MRR@5。
 - 能说清“已实现并测试”和“已证明真实收益”的区别。
-- 能指出 208 项测试证明的是离线功能回归，不是真实模型准确率或联网稳定性。
-- 能指出数据库层是在 SQLite 上验证的；真实 PostgreSQL 由 CI 的 `database` job 承担，远端没跑过就不说已通过。
+- 能指出 210 项测试证明的是离线功能回归，不是真实模型准确率或联网稳定性。
+- 能区分“真实 PostgreSQL 容器上的迁移/连接已通过”和“同一套 db 测试的远端 CI 尚未运行”，不把前者说成 CI 已绿色。
 - 能主动说明远端 CI、Claude Code 数据出站调用和 P/Q 付费评测仍待作者执行。

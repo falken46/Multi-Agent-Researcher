@@ -212,7 +212,7 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 > **本 Phase 不换语料** —— 控制变量，见 `UPGRADE_V3.md` §4.2。
 
 - [x] T17.0 记录基线：`pytest --collect-only` 数量、全量通过情况，填入 `UPGRADE_V3.md` §7
-- [x] T17.1 `docker-compose.yml` 增加 milvus + etcd + minio 三个服务，配 healthcheck（`docker compose config` 校验通过；**完整启动链未实跑**）
+- [x] T17.1 `docker-compose.yml` 增加 milvus + etcd + minio 三个服务，配 healthcheck（2026-09-20 完整启动链实跑通过）
 - [x] T17.2 `rag/vectorstore.py` 新增 `MilvusVectorStore`，方法签名与 `ChromaVectorStore` 完全一致（`add` / `query` / `count`）
 - [x] T17.3 `core/config.py`：`chroma_dir` / `chroma_collection` → `milvus_uri` / `milvus_collection`，同步更新 `.env.example` 与 `TECH_STACK.md`
 - [x] T17.4 `rag/pipeline.py:74`、`:157` 两处实例化改用新实现
@@ -287,12 +287,15 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 - [x] T20.4 `rag/bm25.py` 支持增量追加，不再全量覆盖重建
 - [x] T20.5 `backend/api.py` 扩到任务生命周期接口（发起 / 查询 / 流式 / 取报告）；任务开始落 `running`、正常完成落 `completed`、异常落 `failed`，恢复同一 `thread_id` 更新原记录
 - [x] T20.6 API Key 鉴权，调用主体写入 trace 事件与 `research_tasks`
+- [x] T20.7 Streamlit 通过独立 `FRONTEND_API_KEY` 发送 `X-API-Key`，401 展示可操作提示
+- [x] T20.8 v3 Compose 实跑：PostgreSQL 迁移、Milvus/BM25 建库、backend/frontend 健康门控
 
 **验收标准**
 
 - 换 exporter 后业务代码零改动
 - 增量追加一篇文档后，索引条数正确且原有条目未丢失
 - 无 API Key 请求返回 401
+- 配置鉴权后 Streamlit 可携带自己的 key 完成请求，且不接触完整 `API_KEYS` 映射
 
 ---
 

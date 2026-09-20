@@ -74,6 +74,8 @@
 | `MILVUS_COLLECTION` | deepresearch_kb | Milvus collection 名称 |
 | `CHROMA_COLLECTION` | deepresearch_kb | Chroma collection 名称（`VECTOR_BACKEND=chroma` 时生效） |
 | `DATABASE_URL` | 空 | 业务数据落库连接串；留空则整层跳过 |
+| `API_KEYS` | 空 | 后端 `key:actor` 映射；留空关闭鉴权 |
+| `FRONTEND_API_KEY` | 空 | Streamlit 自己使用的单个 key；不读取完整主体映射 |
 | `BM25_INDEX_PATH` | data/bm25/index.pkl | BM25 本地索引文件 |
 | `RETRIEVAL_TOP_K` | 20 | 单通道召回数量 |
 | `VECTOR_SEARCH_ENABLED` | true | 是否启用向量通道 |
@@ -383,6 +385,10 @@ async def researcher_node(
 
 落库仍是 fail-open：没有配置数据库或写入失败不阻断研究响应，但配置数据库后必须尽可能
 保留失败任务，否则“任务历史”只看得到成功样本，会造成观测偏差。
+
+启用 `API_KEYS` 后，Streamlit 从 `FRONTEND_API_KEY` 读取自己的客户端凭据，并在请求中发送
+`X-API-Key`。前端不读取后端完整的 `key → actor` 映射；401 会被转换成可操作的配置提示，
+而不是只展示通用的 HTTP 异常。
 
 后端调用 LangGraph `astream(stream_mode=["updates", "custom"], version="v2")`：
 

@@ -54,7 +54,8 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    # MinIO 官方 Helm chart 的固定版本从 Quay 发布；Docker Hub 同标签已无法拉取。
+    image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
     command: minio server /minio_data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
@@ -174,6 +175,8 @@ services:
       dockerfile: Dockerfile.frontend
     environment:
       BACKEND_URL: http://backend:8000
+      # 只把前端自己的 key 注入 Streamlit，不把后端完整 API_KEYS 映射暴露给它。
+      FRONTEND_API_KEY: ${FRONTEND_API_KEY:-}
     depends_on:
       backend:
         condition: service_healthy

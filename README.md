@@ -104,6 +104,10 @@ Copy-Item .env.example .env
 DEEPSEEK_API_KEY=sk-xxx
 TAVILY_API_KEY=tvly-xxx
 
+# 可选：启用接口鉴权时，两处 key 要一致；冒号后是写入 trace/任务记录的 actor
+API_KEYS=local-demo-key:本地前端
+FRONTEND_API_KEY=local-demo-key
+
 EMBEDDING_BACKEND=fastembed
 RERANK_BACKEND=onnx
 TRACE_ENABLED=true
@@ -138,6 +142,8 @@ uv run streamlit run frontend/app.py --server.address 127.0.0.1 --server.port 85
 ```
 
 浏览器打开 `http://127.0.0.1:8501`。后端健康检查为 `GET /health`，交互式接口文档位于 `http://127.0.0.1:8000/docs`。
+
+`API_KEYS` 留空时保持默认免鉴权行为。启用后，Streamlit 会从 `FRONTEND_API_KEY` 读取单个客户端凭据并发送 `X-API-Key`；它不会读取后端完整的 key 与 actor 映射。若两处不匹配，页面会明确提示配置问题。
 
 ### 6. 使用 Docker Compose 一键启动
 
@@ -184,6 +190,8 @@ GitHub Actions 在 push 与 pull request 时执行同样的质量门禁。工作
 ## API、SSE 与断点恢复
 
 新任务最安全的做法是只传主题，让后端生成唯一 `thread_id`。以下命令适用于 Bash / Git Bash：
+
+如果后端配置了 `API_KEYS`，手工调用还需增加 `-H "X-API-Key: <key>"`；未启用鉴权时可省略。
 
 ```bash
 curl -N -X POST http://127.0.0.1:8000/research \
@@ -298,7 +306,7 @@ uv run python -m mcp_server.server
 当前分支全量离线回归结果为：
 
 ```text
-208 passed
+210 passed
 ```
 
 这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、MCP schema/协议入口、Docker/Compose/CI 配置契约、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
@@ -311,13 +319,13 @@ uv run python -m mcp_server.server
 | Critic 回环 | 确定性图场景 + Q1/Q2 runner 测试 | 返工路由与 Critic 独立开关生效 | 15 题两轮的完成率与质量变化 |
 | 成本观测 | LLM / trace 汇总测试 | token 与配置价格估算链路可追踪 | 固定评测集上的平均 token、成本和耗时 |
 | MCP 接口 | 官方 SDK 客户端进程内协议测试 + 真实 stdio 子进程握手/调用 | 两个工具可发现，schema 可读，`kb_search` 返回结构化结果 | Claude Code 发送本地工具结果前仍需作者显式授权 |
-| 功能回归（v3） | 208 项离线测试（148 基线 + 60 新增） | Milvus 适配器、数据库层、OTel 导出、增量索引、鉴权与任务生命周期在约定场景下可重复通过 | — |
+| 功能回归（v3） | 210 项离线测试（148 基线 + 62 新增） | Milvus 适配器、数据库层、OTel 导出、增量索引、鉴权、前端凭据透传与任务生命周期在约定场景下可重复通过 | — |
 | 向量库迁移 | 100 题公开基准上 R1/R2/R3 共 18 项指标，Milvus 与 Chroma 记录逐项一致（最大偏差 0.000045，即报告的四位小数精度） | 换向量库没有改变检索结果，迁移正确 | R4 未重跑：它只重排 R3 的同一候选集，且需下载 cross-encoder 权重 |
-| 数据库层 | 11 项 db 测试（SQLite）；`alembic upgrade head` / `downgrade base` 双向验证 | CRUD、幂等、事务回滚、级联与迁移在 SQLite 上可重复通过 | **真实 PostgreSQL 上的验证由 CI 的 `database` job 承担，远端未跑过之前不声明已通过** |
+| 数据库层 | 11 项 db 测试（SQLite）；真实 PostgreSQL 容器完成两版 Alembic upgrade，`GET /tasks` 返回 200 | CRUD 语义在 SQLite 可重复通过；PostgreSQL 建表、连接和查询入口已在本机跑通 | 同一套 db 测试在真实 PostgreSQL 上的自动回归仍由 CI `database` job 承担，远端未跑过不声明绿色 |
 | OTel 导出 | 12 项测试，用官方 `InMemorySpanExporter` 走真实 SDK 读回 span | span 父子关系、无配对事件挂载、异常兜底、多 trace 隔离均正确 | **未验证真实后端能否收下这些 span** —— 需要一个真实 OTLP endpoint；看板截图同理尚未产出 |
 | 增量索引 | 8 项测试，含"增量结果与全量重建等价"与分词调用次数断言 | 追加不改变排序与分数，且旧文档不重复分词 | 只在 128 切片规模验证；这是增量分词不是增量 BM25 |
-| 接口、鉴权与生命周期 | 15 项测试（401/404/503、actor 落库、`running/completed/failed`、恢复幂等） | 调用主体、任务状态与历史查询接口行为符合约定 | 明文 key、无轮换、无权限分级，不是生产级方案 |
-| 容器交付 | **Chroma 时期**：干净命名卷下 44 篇文档 → 128 chunk、Chroma / BM25 各 128 条，前后端健康 | 自动建库和启动门控链在本机可重复运行 | **含 Milvus / PostgreSQL / migrate 的新启动链只做了 `docker compose config` 校验，尚未实跑验证** |
+| 接口、鉴权与生命周期 | 17 项测试（401/404/503、前端请求头、401 页面提示、actor 落库、`running/completed/failed`、恢复幂等） | 调用主体、前后端鉴权契约、任务状态与历史查询接口行为符合约定 | 明文 key、无轮换、无权限分级，不是生产级方案 |
+| 容器交付 | **v3 本机实跑**：PostgreSQL 两版迁移成功；44 篇 → 128 chunk，Milvus / BM25 各 128 条；backend / frontend 均 healthy 且 HTTP 200 | `postgres → migrate` 与 `etcd + minio → milvus → indexer → backend → frontend` 两条门控链成立 | 当前 `.env` 未启用 API 鉴权，未运行真实付费研究；中文路径需用文档中的 buildx 绕过 Compose Bake |
 
 Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query，将 positive 与 hard negative 合并为 1,664 个 passage 的共享池，并直接沿用公开 qrels。正式 R 轨生成 400 条结构化观测：
 
@@ -391,4 +399,4 @@ tools/        KB Search / Web Search / Web Fetch 等 IO 工具
 - Streamlit 尚未提供 checkpoint 恢复 UI，当前需通过 API 恢复。
 - P/Q 真实付费对照已转为秋招后可选实验，未运行就不声明并发加速或 Critic 质量收益。
 - Phase 14 的官方 MCP 客户端与 stdio 链路已验证；Claude Code 实际工具调用会把工具结果发送给外部模型，保留为作者显式授权后的可选验收。
-- Docker 镜像和 Compose 启动链已在本机验证；GitHub Actions 的绿色徽章需要作者提交并推送后由远端运行生成。
+- v3 Docker 镜像和 Compose 启动链已在本机验证，包含 Milvus、PostgreSQL 迁移、双路建库及前后端健康；真实付费研究和鉴权开启态未纳入本轮容器验收。GitHub Actions 的绿色徽章仍需作者提交并推送后由远端运行生成。

@@ -133,6 +133,9 @@ class Settings(BaseSettings):
 
     # 前端
     backend_url: str = "http://127.0.0.1:8000"
+    # Streamlit 作为后端客户端只持有自己的单个 key，不读取服务端完整的 API_KEYS 映射。
+    # 留空时不发送 X-API-Key，与默认关闭鉴权的后端保持兼容。
+    frontend_api_key: SecretStr = SecretStr("")
 
     @model_validator(mode="after")
     def validate_cross_field_constraints(self) -> Settings:
