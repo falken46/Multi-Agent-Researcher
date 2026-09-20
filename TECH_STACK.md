@@ -72,7 +72,7 @@
 | httpx | FastAPI 测试客户端（仅开发依赖；Phase 12 的同步检索工具通过 `asyncio.to_thread` 接入异步节点） |
 | ruff | Lint（`E4` / `E7` / `E9` / `F` / `I`），本地与 CI 使用；当前锁定 `0.16.4` |
 
-### 2.4 v3 变更（规划中，Phase 17—21）
+### 2.4 v3 变更（Phase 17 / 19 已完成，2026-09-09）
 
 > 详见 `UPGRADE_V3.md`。v3 是技术栈升级，**不引入新的研究能力**。
 
@@ -80,34 +80,38 @@
 
 | 包名 | 用途 | 选型说明 |
 |------|------|----------|
-| **pymilvus** | Milvus 客户端 | 替换 `chromadb`。Chroma 属原型档；国内企业侧（尤其金融、政企、SI）主流是 Milvus。**诚实前提：本项目语料规模 Chroma 完全够用，换它是为技术栈对口，代价是多三个容器** |
-| **sqlalchemy** | ORM | 业务数据落库，补齐全项目零持久化的空洞 |
-| **alembic** | 数据库迁移 | `CREATE TABLE IF NOT EXISTS` 只能建新表、改不了已有表；有迁移脚本才算完整的数据库工程 |
-| **psycopg[binary]** | PostgreSQL 驱动 | |
-| **langfuse**（或 `opentelemetry-sdk` + exporter） | 可观测落地 | 二选一，待决策。`core/trace.py` 事件模型不变，只换 exporter |
+| **pymilvus** `3.0.1` | Milvus 客户端 | ✅ 已接入。**诚实前提：本项目 128 个切片 Chroma 完全够用**，换它是技术栈对口不是性能需要，代价是多三个容器（milvus + etcd + minio） |
+| **milvus-lite** `3.2.1` | 本地文件形态的 Milvus | ✅ 已接入。让测试与无 Docker 环境跑同一套代码，CI 不需要起完整 Milvus |
+| **sqlalchemy** `2.0.52` | ORM | ✅ 已接入。4 张表，方言中立（不用 JSONB / ARRAY），同一套模型 SQLite 与 PostgreSQL 都能跑 |
+| **alembic** `1.19.2` | 数据库迁移 | ✅ 已接入。⚠️ `alembic.ini` **必须纯 ASCII** —— 它用 `encoding="locale"` 读文件，中文 Windows 上是 GBK，非 ASCII 字符会在 configparser 里抛 UnicodeDecodeError，报错点离配置很远 |
+| **psycopg[binary]** `3.3.5` | PostgreSQL 驱动 | ✅ 已接入 |
+| **opentelemetry-sdk** `1.44.0` + **opentelemetry-exporter-otlp-proto-http** | 可观测导出 | ✅ 已接入。**选 OTel 标准而非绑定某家 SDK**：Laminar 是 OTel 原生、Langfuse 也吃 OTLP，换后端只改 endpoint 与 headers。`core/trace.py` 的事件模型一行未改，JSONL 仍是主路径 |
 
 **移除**
 
 | 包名 | 原因 |
 |------|------|
-| chromadb | 被 Milvus 取代 |
+| chromadb | ⚠️ **未移除**：`VECTOR_BACKEND=chroma` 分支保留用于 A/B 对照，验证换库未改变检索结果 |
 
 **配置字段变更**
 
 ```bash
-# 移除
+# 保留（chroma 后端仍可用，用于 A/B 对照）
 CHROMA_DIR=data/chroma
 CHROMA_COLLECTION=deepresearch_kb
 
 # 新增
-MILVUS_URI=http://localhost:19530
+VECTOR_BACKEND=chroma                 # chroma | milvus
+# ⚠️ 变量名是 MILVUS_ENDPOINT 不是 MILVUS_URI —— 后者被 pymilvus 自己占用，
+#    它在 import 时就读该变量并强制按 http 解析，填本地文件路径会在 import 阶段崩。
+MILVUS_ENDPOINT=http://localhost:19530
 MILVUS_COLLECTION=deepresearch_kb
 MILVUS_TOKEN=
 DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/deepresearch
-LANGFUSE_HOST=
-LANGFUSE_PUBLIC_KEY=
-LANGFUSE_SECRET_KEY=
-TRACE_FALLBACK_DIR=traces        # exporter 未配置时的兜底
+OTEL_ENDPOINT=                        # 留空 = 只写本地 JSONL
+OTEL_SERVICE_NAME=deepresearch-agent
+OTEL_HEADERS=                         # 形如 Authorization=Bearer xxx
+OTEL_TIMEOUT=10
 ```
 
 > 沿用既有约定：新增配置项必须同时更新三处 —— `core/config.py`、`.env.example`、本文档。
@@ -136,6 +140,9 @@ TRACE_FALLBACK_DIR=traces        # exporter 未配置时的兜底
 ---
 
 ## 4. 环境变量（v2 完整版）
+
+> ⚠️ 本节是 **v2** 的完整清单。v3 新增的 `VECTOR_BACKEND` / `MILVUS_*` / `DATABASE_URL` 等见 §2.4，
+> 以 `.env.example` 为准。
 
 ```bash
 # ---- LLM ----
@@ -212,7 +219,9 @@ uv sync --group dev
 |------|--------|
 | langgraph | 当前锁定 `1.1.10`；升级可能改变 `astream(version="v2")` 事件结构、节点注入或 durability 行为，升级前需跑图、后端流与 checkpoint 测试 |
 | langgraph-checkpoint-sqlite | 当前锁定 `3.1.1`；升级前验证 `AsyncSqliteSaver` 生命周期、同一 `thread_id` 恢复和 `None` 输入续跑 |
-| chromadb | 主版本升级会改变持久化目录格式，需重建索引 |
+| chromadb | 主版本升级会改变持久化目录格式，需重建索引（仅 `VECTOR_BACKEND=chroma` 时相关） |
+| pymilvus / milvus-lite | 主版本升级会改变 collection schema 与索引参数，需重建索引；注意环境变量不能叫 `MILVUS_URI` |
+| sqlalchemy / alembic | 迁移脚本一旦执行过不可改写，只能追加；`alembic.ini` 必须保持纯 ASCII |
 | fastembed | 模型名称随版本调整，锁定 `EMBEDDING_MODEL` 后不随意变更，否则历史向量库失效 |
 | mcp | v2 已把 `FastMCP` 更名为 `MCPServer`；升级前验证工具 JSON Schema、结构化输出、stdio 握手与 Claude Code 配置 |
 | ruff | 新版本可能新增或调整规则；升级后先运行 `ruff check .`，不要通过全局 ignore 掩盖真实错误 |

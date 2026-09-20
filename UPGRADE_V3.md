@@ -14,23 +14,46 @@ v2 交付了一个能力完整的深度研究系统。v3 **不增加新的研究
 | 维度 | v2 现状 | v3 目标 |
 |------|---------|---------|
 | 向量库 | Chroma（嵌入式、零运维、原型档） | **Milvus**（独立服务、企业档，国内企业侧主流） |
-| 知识库语料 | `data/kb/` 44 篇**本项目自己的架构说明** | **真实外部语料**，系统不再自说自话 |
+| 知识库语料 | `data/kb/` 44 篇本项目自己的架构说明 | ~~真实外部语料~~ **（P2 可选，见 §2.1）** |
 | 业务数据持久化 | **无**。`/research` 跑完只留 trace 文件，任务与报告都不落库 | **PostgreSQL**：研究任务、报告、引用来源落库 |
 | BM25 索引 | pickle 整包覆盖重建，加一篇文档要重建全量 | 支持**增量追加** |
-| 可观测落地 | 本地 JSONL + 进程内锁，多副本会散 | **Langfuse / OTel exporter**，JSONL 降为 fallback |
+| 可观测落地 | 本地 JSONL + 进程内锁，多副本会散 | **OpenTelemetry 导出**（后端可为 Laminar / Langfuse 等任意 OTLP 接收端）；**JSONL 仍是主路径**，不降级 |
 | 对外接口 | `/health` + `/research` 两个，无鉴权 | 任务生命周期接口 + API Key |
 
 ---
 
 ## 2. 为什么做这次升级
 
-### 2.1 硬伤：知识库装的是项目自己的文档
+### 2.1 观感问题：知识库装的是项目自己的文档（**已降级为可选，2026-09-08**）
 
-`data/kb/` 下 44 篇全部是 `01_langgraph_stategraph.md`、`13_rrf.md`、`44_async_cancellation_backpressure.md` 这类**本项目的架构说明**。
+`data/kb/` 下 44 篇全部是 `01_langgraph_stategraph.md`、`13_rrf.md` 这类**本项目的架构说明**。
+一个"深度研究系统"检索自己的设计文档，读者第一眼会觉得循环、像玩具。
 
-也就是说，一个"深度研究系统"检索的是它自己的设计文档。这是自指的 demo —— 任何人打开仓库第一眼就会发现，而且**它会连带削弱评测结论的可信度**（在自己写的文档上做检索评测，语料和查询同源）。
+> ⚠️ **本节初稿有一处事实错误，已更正**：初稿写「它会削弱评测结论的可信度（语料与查询同源）」，
+> **这是错的**。R 轨评测跑的是 `eval/dataset/t2_reranking`（C-MTEB/T2Reranking 公开基准），
+> 与 `data/kb` 完全无关。`docs/study/04_实验与结论.md:136` 本来就写明了两者职责不同：
+> `data/kb/` 是产品演示知识库，公开基准才是评测数据。**换语料不影响任何评测数字。**
 
-**这一项不改代码，只换文件，是本次升级里投入最小、收益最大的一条。**
+因此这一项**只有观感收益，没有技术后果**，且存在不弱的反面论证：
+
+| 保留自述文档的理由 | 说明 |
+|---|---|
+| 零准备可复现 | clone 下来直接 `index_cli --dir data/kb` 就能跑，不用找语料、不涉版权 |
+| 答案可验证 | 读者能打开 `13_rrf.md` 核对系统答得对不对；换成外部论文则无从判断答案是否编造 |
+
+**可辩护的对外说法**：「演示语料用项目自己的技术文档，是为了任何人零准备就能复现，
+且能对着源文档验证答案；评测走 C-MTEB 公开基准，两者职责分开。」
+
+另外，初稿建议的 **arXiv 论文方案不可行**：`EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5` 与
+`RERANK_MODEL=BAAI/bge-reranker-base` 都是中文模型，换英文语料会掉检索质量；
+换 embedding 模型则整个向量库作废、评测前后不可比（见 §5 与 `TECH_STACK.md` §8）。
+**真要换只能换中文语料。**
+
+换语料的实际成本：`tests/test_rag_pipeline.py:32` 的断言写死了 `13_rrf.md`；
+`README.md` / `ARCHITECTURE.md` / `docs/study/` 多处示例要同步改。
+
+**结论：Phase 18 从 M4 必做降为 P2 可选**（作者 2026-09-08 决定）。
+优先级低于 Phase 19 —— 后者补的是 JD 里 35% 的真实技能空洞，收益是硬的。
 
 ### 2.2 技术栈档次：Chroma 与"零业务数据持久化"
 
@@ -62,7 +85,7 @@ v2 交付了一个能力完整的深度研究系统。v3 **不增加新的研究
 ```
 DeepResearch Agent 主干
   ├─ Phase 17  Chroma → Milvus          ✅ 已完成（2026-09-08）
-  ├─ Phase 18  知识库换真实语料
+  ├─ Phase 18  知识库换真实语料          ⏸ 降为 P2 可选（2026-09-08）
   ├─ Phase 19  PostgreSQL 基础设施
   ├─ Phase 20  可观测 exporter + BM25 增量
   └─ Phase 21  交付物更新
@@ -121,13 +144,15 @@ DeepResearch Agent 主干
 
 **现状**：`data/kb/` 44 篇自述文档，构建为 128 个 chunk。
 
-**目标**：换成真实外部语料。候选方向：
+**⏸ 本节已降级为 P2 可选，论证见 §2.1。** 以下保留为将来真要做时的参考。
 
-- 某个方向的 arXiv 公开论文（几十篇）—— 与"深度研究"场景天然契合，评测集也好造
-- 某个开源项目的完整技术文档
-- 公开行业研究报告
+**目标**：换成真实外部语料。**只能选中文语料** —— embedding 与 reranker 都是中文模型
+（`bge-small-zh-v1.5` / `bge-reranker-base`），换英文会掉检索质量；换模型则向量库作废、评测不可比。
 
-**待作者决策**：具体语料方向。选定后需记录来源清单（每篇的标题、来源 URL、获取日期）。
+~~arXiv 公开论文~~ ← 初稿建议，因语言不匹配已否决。
+
+**待作者决策**：具体中文语料方向。选定后需记录来源清单（标题、来源 URL、获取日期），
+并同步改 `tests/test_rag_pipeline.py:32` 的 `13_rrf.md` 断言。
 
 **⚠️ 顺序上的关键设计**：**先做 Phase 17（换向量库、保持旧语料），再做 Phase 18（换语料）。**
 
@@ -172,9 +197,21 @@ DeepResearch Agent 主干
 
 **现状**：`core/trace.py:55` 写 `traces/日期/trace_id.jsonl`，用 `threading.Lock` 保证同进程内不串。多副本部署会各写各的，无法集中查询。
 
-**目标**：接 Langfuse（建议）或 OpenTelemetry exporter。事件模型（`task_start` / `task_end` / `fallback` / revision 事件 + token 成本）**保持不变**，只换落地层，业务代码零改动。
+**目标（已完成）**：接 **OpenTelemetry**，而不是绑定某一家的 SDK。事件模型
+（`task_start` / `task_end` / `fallback` / revision 事件 + token 成本）**一行未改**，
+只在落地层叠加一个 `core/otel.py`。
 
-**本地 JSONL 保留为 fallback** —— 未配置 exporter 时仍可完全离线运行。这是 v2 "无 API Key 也能复现"这一优点的保命条款，不得移除。
+**为什么是 OTel 而不是 Langfuse SDK**：Laminar 是 OTel 原生，Langfuse 也接受 OTLP，
+所以真正的问题不是"选哪家"，而是"绑标准还是绑 SDK"。选标准之后换后端只改
+`OTEL_ENDPOINT` 与 `OTEL_HEADERS` —— 与 `rag/vectorstore.py` 用窄接口隔离
+向量库供应商是同一套思路。选型依据见 §7.4。
+
+**事件流 → span 树的映射**：`task_start` / `task_resume` 开根 span，`node_start` / `node_end`
+开关子 span，其余（`llm_call` / `retrieval` / `fallback` / `revision` / `error`）
+挂成 span event。没有配对的事件不丢，也不会变成一堆零长度的孤立 span。
+
+**本地 JSONL 仍是主路径，不是 fallback** —— 未配置 endpoint 时 OTel 层完全不介入。
+这是 v2 "无 API Key 也能复现"这一优点的保命条款，不得移除。
 
 ### 4.6 接口与鉴权（Phase 20，P2）
 
@@ -227,7 +264,65 @@ DeepResearch Agent 主干
 | `ruff check .` | All checks passed | |
 | `rag/hybrid.py` / `rag/rerank.py` / `core/llm.py` | **0 处改动** | ← 本 Phase 的核心验收信号 |
 
-### 7.3 A/B 对照结果（T17.8）
+### 7.3 Phase 19 完成后（2026-09-08）
+
+| 项 | 数值 | 增减去向 |
+|---|---|---|
+| 测试总数 | **173** | +11，全部来自新增 `tests/test_db_repository.py` |
+| `pytest -m "not live"` | **173 passed in 16.12s** | |
+| `ruff check .` | All checks passed | |
+| `rag/hybrid.py` / `rag/rerank.py` / `core/llm.py` / `agents/*` | **0 处改动** | 落库挂在 `backend/streaming.py` 收尾处，编排层未被侵入 |
+
+新增：`db/models.py`（4 张表）、`db/session.py`、`db/repository.py`、`db/persistence.py`、
+`db/migrations/`（Alembic + 首个迁移）、compose 的 `postgres` + `migrate` 服务、
+CI 的 `database` job（真实 PostgreSQL）。
+
+**Phase 19 的三个设计决策**
+
+1. **落库是可选的（fail-open）**。`DATABASE_URL` 留空则整层静默跳过，
+   写库失败只记日志不打断响应。保住 v2「无外部依赖也能跑完整离线测试」的优点。
+   > 对照：合规审查版同一层是 **fail-closed** —— 写不进库就中止任务。
+   > 同一段代码、两种场景、相反策略，这是有意的。
+2. **模型方言中立**（不用 JSONB / ARRAY），所以本地与常规 CI 跑 SQLite、
+   生产跑 PostgreSQL。但「在 SQLite 上过」不等于「在 PostgreSQL 上过」，
+   因此 CI 单独加了一个 `database` job，用 `TEST_DATABASE_URL`
+   把**同一套测试**对着真实 PostgreSQL 再跑一遍，并验证迁移在 PG 上双向可用。
+3. **`citations` 必须存 `rank`**。只存"引用了这个来源"，事后就回答不了
+   「当时为什么是这条排第一」——索引重建、模型升级后这个问题就永远没答案了。
+   `retrieval_score` 上游暂未携带，**取不到就留空，不填 0**（0 会被误读成"相关度为零"）。
+
+### 7.4 Phase 20 完成后（2026-09-09）
+
+| 项 | 数值 | 增减去向 |
+|---|---|---|
+| 测试总数 | **208** | +35：OTel 12、BM25 增量 8、接口/鉴权/任务生命周期 15；原有测试一项未删 |
+| `pytest -m "not live"` | **208 passed** | |
+| `ruff check .` | All checks passed | |
+| `rag/hybrid.py` / `rag/rerank.py` / `agents/*` | **0 处改动** | 三轮改造都没侵入编排与融合层 |
+
+**Phase 20 的选型结论：用 OpenTelemetry，不绑定 Langfuse 或 Laminar。**
+
+依据（2026-09-09 核实）：
+
+| | Langfuse | Laminar |
+|---|---|---|
+| GitHub stars | 34.4k（2023-05 起） | 3.2k（2024-08 起，YC S24） |
+| 归属 | **2026-01 起并入 ClickHouse** | 独立公司 |
+| 与 OTel 的关系 | 集成 OTLP | **OTel 原生** |
+
+两家都吃 OTLP，所以**真正的问题不是"选哪家"，而是"绑标准还是绑 SDK"**。
+选 OTel 之后换后端只改 `OTEL_ENDPOINT` 与 `OTEL_HEADERS`，代码不动 ——
+和 `rag/vectorstore.py` 用窄接口隔离向量库供应商是同一套思路。
+
+**没有把任何一家塞进 compose**：两者自托管都要 ClickHouse + Postgres 等一整套，
+而本项目 compose 已有 7 个服务，再加会到十几个 —— 一个 demo 项目摆十几个容器，
+读者的第一反应不会是"厉害"，而是"在堆东西"。要看板截图用云端免费额度跑一次即可。
+
+⚠️ **验证边界**：OTel 那 12 项测试用官方 `InMemorySpanExporter` 走真实 SDK 读回 span，
+验证的是 span 树建对了；**没有验证真实 Laminar / Langfuse 能否收下这些 span**，
+看板截图（T20.3）也尚未产出。这两条不能声称已完成。
+
+### 7.5 Phase 17 的 A/B 对照结果（T17.8）
 
 分两步验证，先小后大。
 
@@ -271,7 +366,7 @@ DeepResearch Agent 主干
 
 ---
 
-## 7.4 Phase 17 踩到的两个坑（写给面试与将来的自己）
+## 7.6 Phase 17 踩到的三个坑（写给面试与将来的自己）
 
 ### 坑一：Milvus 的 `distance` 在 COSINE 下是相似度，不是距离
 

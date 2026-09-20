@@ -101,9 +101,35 @@ class Settings(BaseSettings):
     quality_threshold: float = Field(default=0.7, ge=0, le=1)
     checkpoint_db: Path = Path("data/checkpoints.sqlite")
 
+    # 业务数据持久化（Phase 19）
+    # 留空 = 不落库，全链路静默跳过。这样没有数据库的机器仍可跑完整离线测试，
+    # 保住 v2 "无外部依赖也能复现" 的既有优点。
+    #   PostgreSQL: postgresql+psycopg://user:pass@localhost:5432/deepresearch
+    #   SQLite    : sqlite:///data/app.db
+    database_url: str = ""
+    db_echo: bool = False
+
+    # 接口鉴权（Phase 20）
+    # 形如 "key1:研究所,key2:合规部"。留空 = 不鉴权，全部放行、actor 记为 anonymous。
+    # 默认关闭是为了保住"clone 下来直接能跑"，也不破坏既有前端与测试。
+    api_keys: str = ""
+
     # 可观测
     trace_dir: Path = Path("traces")
     trace_enabled: bool = True
+
+    # OpenTelemetry 导出（Phase 20）
+    # 留空 = 不导出，只写本地 JSONL。JSONL 永远是主路径，OTel 是叠加的一层，
+    # 这样"没有任何外部服务也能完整跑"这个既有优点不会丢。
+    # 用 OTel 标准而不是绑定某家 SDK：Laminar 是 OTel 原生，Langfuse 也吃 OTel，
+    # 换后端只改 endpoint 与 headers，代码不动。
+    #   Laminar : https://api.lmnr.ai:8443/v1/traces  （或自托管地址）
+    #   Langfuse: https://cloud.langfuse.com/api/public/otel/v1/traces
+    otel_endpoint: str = ""
+    otel_service_name: str = "deepresearch-agent"
+    # 形如 "Authorization=Bearer xxx"，多个用逗号分隔
+    otel_headers: SecretStr = SecretStr("")
+    otel_timeout: float = Field(default=10.0, gt=0)
 
     # 前端
     backend_url: str = "http://127.0.0.1:8000"

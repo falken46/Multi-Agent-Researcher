@@ -7,10 +7,14 @@
 ## 核心能力
 
 - **四 Agent 状态机**：Planner 拆题，Researcher 检索与归纳，Critic 评分并指出缺口，Writer 汇总成报告。
-- **本地优先的混合检索**：Chroma 向量召回与 BM25 关键词召回经 RRF 融合，再按配置执行 rerank；本地检索失败或最高分低于配置阈值时才联网补查。
+- **本地优先的混合检索**：Milvus 向量召回与 BM25 关键词召回经 RRF 融合，再按配置执行 rerank；本地检索失败或最高分低于配置阈值时才联网补查。向量库后端由 `VECTOR_BACKEND` 切换（`milvus` / `chroma`），上层融合与重排逻辑不感知供应商。
 - **受控并发与失败隔离**：Researcher 使用 `asyncio.gather`、`Semaphore`、超时和 `return_exceptions=True` 并发处理独立子问题。
 - **有边界的质量返工**：Critic 只让 Researcher 补查明确缺口，并通过返工上限和分数停滞检测防止死循环。
 - **可观测、可恢复**：JSONL trace 记录节点、token、估算成本、耗时、降级和返工事件；SQLite Checkpoint 通过稳定 `thread_id` 支持 API 从最近 checkpoint 恢复。
+- **业务数据落库**：PostgreSQL 保存任务、子问题、报告与引用来源（含检索名次），任务按 `running → completed / failed` 更新并用 `thread_id` 保持恢复幂等；SQLAlchemy + Alembic 管理表结构与迁移，未配置 `DATABASE_URL` 时整层静默跳过。
+- **OpenTelemetry 导出**：事件流映射为带父子关系的 span（任务为根、Agent 节点为子、llm_call/降级/返工为 span event），可指向任意 OTLP 后端（Laminar、Langfuse 等）；**本地 JSONL 仍是主路径**，未配置 endpoint 时完全不介入。
+- **调用主体可追溯**：API Key 鉴权解析出的 actor 写入 trace 事件与任务记录 —— v2 记了模型/token/成本，唯独缺"是谁在调"。
+- **增量关键词索引**：BM25 缓存分词结果，追加文档只对新增内容分词（引擎因 IDF 依赖全语料仍需重建，这是 `rank_bm25` 的限制）。
 - **HTTP + MCP 双入口**：FastAPI/SSE 面向 Web 前端，官方 MCP SDK v2 暴露 `deep_research` 与只读 `kb_search`，供 LLM 客户端发现和调用。
 - **容器化交付与 CI**：多阶段镜像、非 root 运行、健康检查、持久化卷与自动建库组成一键启动链；GitHub Actions 使用锁文件执行 Ruff 和离线 pytest。
 - **离线可回归**：默认测试不依赖 API Key 或网络，检索测试使用确定性 fake embedding。
@@ -42,11 +46,14 @@ LangGraph StateGraph ◄──────► AsyncSqliteSaver（SQLite Checkpoi
 上述所有 Writer 分支 → END
 
 离线建库：data/kb → Loader → Splitter
-                              ├─ Embedding → Chroma
+                              ├─ Embedding → Milvus（可切 Chroma）
                               └─ jieba → BM25 Index
 
-在线查询：Researcher → tools/kb_search.py → Chroma + BM25 → RRF → 可选 Rerank
+在线查询：Researcher → tools/kb_search.py → Milvus + BM25 → RRF → 可选 Rerank
                └─ 本地检索失败或分数不足 → tools/web_search.py
+
+任务收尾：backend/streaming.py → db/persistence.py → PostgreSQL
+          （research_tasks / sub_questions / reports / citations）
 
 Planner / Researcher / Critic / Writer
  └─ core/llm.py → 统一模型调用、重试、token 与估算成本记录
@@ -56,7 +63,13 @@ LLM 客户端 → MCP stdio → mcp_server/server.py
                          └─ kb_search → tools/kb_search.py → 同一 RAG 流水线
 ```
 
-图中的两类持久化职责不同：Checkpoint 保存 LangGraph 状态，用来继续未完成任务；trace 保存运行事件，用来排查问题和汇总用量，二者不能互相替代。
+图中的三类持久化职责不同，互相不能替代：
+
+| 存的东西 | 存在哪 | 用来干什么 |
+|---|---|---|
+| LangGraph 状态 | SQLite Checkpoint | 继续未完成的任务 |
+| 运行事件、token、耗时 | JSONL trace | 排查问题、汇总用量 |
+| 业务数据（任务/报告/引用） | PostgreSQL | 事后查询、统计、追溯引用名次 |
 
 ## 快速开始
 
@@ -104,7 +117,9 @@ TRACE_ENABLED=true
 uv run python -m rag.index_cli --dir data/kb
 ```
 
-默认索引写入 `data/chroma/` 和 `data/bm25/`，它们是可重建的运行时数据，不进入 Git。建库结束后应确认输出中的向量数量与 BM25 数量都大于 0。
+向量索引默认写入 Milvus（`VECTOR_BACKEND=chroma` 时写 `data/chroma/`），关键词索引写 `data/bm25/`。它们都是可重建的运行时数据，不进入 Git。建库结束后应确认输出中的向量数量与 BM25 数量都大于 0。
+
+本机没有 Docker 时，把 `MILVUS_ENDPOINT` 指向一个本地文件（如 `data/milvus_lite.db`）即可用 Milvus Lite 跑通同一套代码，无需起服务。
 
 > `--embedding-backend fake` 只覆盖当次建库命令，适合隔离测试，不代表应用运行时也会切换为 fake。建库与查询必须使用相同的 embedding 后端和模型；切换后请更新 `.env` 并重新执行上述建库命令，否则可能出现维度不匹配或检索结果失真。
 
@@ -135,12 +150,16 @@ docker compose up --build
 Compose 会按以下顺序执行：
 
 ```text
-indexer 全量构建 Chroma + BM25
-  └─ 成功后启动 backend
-       └─ /health 通过后启动 frontend
+etcd + minio  ──healthy──→ milvus ──healthy──┐
+                                             ├─→ indexer 全量构建 Milvus + BM25 ──成功──┐
+postgres ──healthy──→ migrate（alembic upgrade head）──成功──────────────────────────┤
+                                                                                     └─→ backend
+                                                                                          └─ /health 通过 → frontend
 ```
 
-浏览器仍访问 `http://127.0.0.1:8501`。Chroma、BM25、SQLite checkpoint、JSONL trace 与模型缓存位于 Docker 命名卷，重建容器不会丢失；`docker compose down` 只停止并移除容器与网络，不删除这些卷。
+`migrate` 是一次性任务，跑完即退出。**不把 alembic 放进 backend 的启动脚本**，是为了多副本时不会有几个进程同时改表结构。
+
+浏览器仍访问 `http://127.0.0.1:8501`。Milvus 数据、BM25、PostgreSQL 数据、SQLite checkpoint、JSONL trace 与模型缓存位于 Docker 命名卷，重建容器不会丢失；`docker compose down` 只停止并移除容器与网络，不删除这些卷。
 
 当前首版会在每次 `up` 时全量重建 44 篇小型产品知识库。这样牺牲少量启动时间，换取了索引与当前语料、切分配置始终一致，也避免额外维护一套“索引是否过期”判断逻辑。
 
@@ -190,6 +209,16 @@ Windows PowerShell 5 / 7 可使用 `curl.exe`；示例使用英文主题以避�
 ```
 
 当前恢复入口只在后端 API 提供，Streamlit 页面尚无恢复控件。`resume=true` 必须携带 `thread_id`，且主题必须与已保存任务完全一致。
+
+配置 `DATABASE_URL` 后还可查询任务历史：
+
+| 接口 | 作用 |
+|---|---|
+| `GET /tasks` | 按开始时间倒序列出任务 |
+| `GET /tasks/{thread_id}` | 查询任务状态与子问题 |
+| `GET /tasks/{thread_id}/report` | 读取最新报告与带名次的引用 |
+
+后端在返回 `start` SSE 前按 `thread_id` 写入 `running`；正常结束更新为 `completed`，图执行或 checkpoint 恢复异常则更新为 `failed`。恢复同一任务会更新原记录，不新增重复任务。未配置数据库时，这三个历史接口返回 503，研究主流程仍可运行。
 
 SSE 可能发送以下事件：
 
@@ -269,20 +298,26 @@ uv run python -m mcp_server.server
 当前分支全量离线回归结果为：
 
 ```text
-148 passed
+208 passed
 ```
 
 这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、MCP schema/协议入口、Docker/Compose/CI 配置契约、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
 
 | 维度 | 当前已有证据 | 现在可以得出的结论 | 边界 / 可选后续 |
 |---|---|---|---|
-| 功能回归 | 148 项离线测试 | 约定的本地场景可重复通过 | 真实 LLM / 搜索端到端完成率 |
+| 功能回归（v2 基线） | 148 项离线测试 | v2 约定功能路径可重复通过 | 真实 LLM / 搜索端到端完成率 |
 | 检索链路 | 100 题公开 qrels、1,664 passage、400 条结构化观测，六项指标 | 混合检索与重排在该基准上均未取得普遍收益 | 产品知识库外推与 reranker 模型匹配分析 |
 | 并发研究 | fake IO + P1/P2 固定任务 runner 测试 | 并发上限、配对任务和续跑边界生效 | 相同真实任务的串行 / 并行耗时对照 |
 | Critic 回环 | 确定性图场景 + Q1/Q2 runner 测试 | 返工路由与 Critic 独立开关生效 | 15 题两轮的完成率与质量变化 |
 | 成本观测 | LLM / trace 汇总测试 | token 与配置价格估算链路可追踪 | 固定评测集上的平均 token、成本和耗时 |
 | MCP 接口 | 官方 SDK 客户端进程内协议测试 + 真实 stdio 子进程握手/调用 | 两个工具可发现，schema 可读，`kb_search` 返回结构化结果 | Claude Code 发送本地工具结果前仍需作者显式授权 |
-| 容器交付 | 干净命名卷下 44 篇文档 → 128 chunk、Chroma / BM25 各 128 条，前后端健康 | 自动建库和启动门控链在本机可重复运行 | 真实模型任务仍属于显式 `live` smoke |
+| 功能回归（v3） | 208 项离线测试（148 基线 + 60 新增） | Milvus 适配器、数据库层、OTel 导出、增量索引、鉴权与任务生命周期在约定场景下可重复通过 | — |
+| 向量库迁移 | 100 题公开基准上 R1/R2/R3 共 18 项指标，Milvus 与 Chroma 记录逐项一致（最大偏差 0.000045，即报告的四位小数精度） | 换向量库没有改变检索结果，迁移正确 | R4 未重跑：它只重排 R3 的同一候选集，且需下载 cross-encoder 权重 |
+| 数据库层 | 11 项 db 测试（SQLite）；`alembic upgrade head` / `downgrade base` 双向验证 | CRUD、幂等、事务回滚、级联与迁移在 SQLite 上可重复通过 | **真实 PostgreSQL 上的验证由 CI 的 `database` job 承担，远端未跑过之前不声明已通过** |
+| OTel 导出 | 12 项测试，用官方 `InMemorySpanExporter` 走真实 SDK 读回 span | span 父子关系、无配对事件挂载、异常兜底、多 trace 隔离均正确 | **未验证真实后端能否收下这些 span** —— 需要一个真实 OTLP endpoint；看板截图同理尚未产出 |
+| 增量索引 | 8 项测试，含"增量结果与全量重建等价"与分词调用次数断言 | 追加不改变排序与分数，且旧文档不重复分词 | 只在 128 切片规模验证；这是增量分词不是增量 BM25 |
+| 接口、鉴权与生命周期 | 15 项测试（401/404/503、actor 落库、`running/completed/failed`、恢复幂等） | 调用主体、任务状态与历史查询接口行为符合约定 | 明文 key、无轮换、无权限分级，不是生产级方案 |
+| 容器交付 | **Chroma 时期**：干净命名卷下 44 篇文档 → 128 chunk、Chroma / BM25 各 128 条，前后端健康 | 自动建库和启动门控链在本机可重复运行 | **含 Milvus / PostgreSQL / migrate 的新启动链只做了 `docker compose config` 校验，尚未实跑验证** |
 
 Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query，将 positive 与 hard negative 合并为 1,664 个 passage 的共享池，并直接沿用公开 qrels。正式 R 轨生成 400 条结构化观测：
 
@@ -306,7 +341,11 @@ Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query
 | 决策 | 为什么这样做 | 代价 / 边界 |
 |---|---|---|
 | LangGraph 条件图 | 显式表达节点、循环、条件边与恢复点 | 引入框架概念和状态 schema 维护成本 |
-| Chroma + BM25 + RRF | 同时覆盖语义相近与关键词精确匹配，RRF 无需直接比较异构分数 | 需要维护两套索引并用评测校准参数 |
+| Milvus + BM25 + RRF | 同时覆盖语义相近与关键词精确匹配，RRF 无需直接比较异构分数 | 需要维护两套索引并用评测校准参数 |
+| Milvus 取代 Chroma，但保留 Chroma 分支 | 企业侧向量库更常见；保留旧后端是为了做 A/B 对照，验证换库没有改变检索结果 | **本项目语料只有百余 chunk，Chroma 完全够用**——换库是技术栈对口而非性能需要，代价是多三个容器（milvus + etcd + minio） |
+| PostgreSQL + SQLAlchemy + Alembic | 任务、报告与引用需要事后查询和追溯；有迁移脚本才能安全改表结构 | 多一个外部依赖；`DATABASE_URL` 留空时整层跳过，保住无依赖离线回归 |
+| `citations` 存检索名次 | 事后要能回答「当时为什么是这条排第一」——索引重建后就再也复原不了 | 上游 `Citation` 暂未携带分数，`retrieval_score` 取不到时留空而非填 0 |
+| 落库失败只告警不中断 | 研究助手丢一条记录不是灾难，但因落库失败让用户拿不到报告不可接受 | 需要靠日志发现写入异常；合规类场景应改为写不进就中止 |
 | 本地优先、低分联网 | 优先利用可控语料，仅在证据不足时承担联网成本 | 阈值目前仍需正式评测校准 |
 | `asyncio` + `Semaphore` | 并发独立 IO 子问题，同时限制资源和 API 压力 | 必须配套超时、限流与异常隔离 |
 | Critic 定向返工 | 将“研究证据不足”转换为可检索的明确缺口 | Critic 分数不是第三方质量结论，需对照实验验证收益 |

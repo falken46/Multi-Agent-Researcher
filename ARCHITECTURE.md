@@ -37,7 +37,7 @@
 +---------------------------v---------------------------------+
 |                   检索层 (Retrieval / RAG)                   |
 |                                                              |
-|   loader -> splitter -> embeddings -> vectorstore (Chroma)   |
+|   loader -> splitter -> embeddings -> vectorstore (Milvus)   |
 |                      -> bm25 index                           |
 |                                                              |
 |   查询：向量召回 + BM25 召回 -> RRF 融合 -> Rerank -> Top-N   |
@@ -69,7 +69,11 @@
 | `MODEL_NAME` | deepseek-v4-flash | 主模型 |
 | `EMBEDDING_BACKEND` | fastembed | `fastembed` / `remote` / `fake` |
 | `EMBEDDING_MODEL` | BAAI/bge-small-zh-v1.5 | 中文小模型 |
-| `CHROMA_COLLECTION` | deepresearch_kb | Chroma collection 名称 |
+| `VECTOR_BACKEND` | milvus | 向量库后端：`milvus` / `chroma` |
+| `MILVUS_ENDPOINT` | http://localhost:19530 | Milvus 地址；填本地文件路径则走 Milvus Lite。**不能叫 `MILVUS_URI`**，那个被 pymilvus 自己占用 |
+| `MILVUS_COLLECTION` | deepresearch_kb | Milvus collection 名称 |
+| `CHROMA_COLLECTION` | deepresearch_kb | Chroma collection 名称（`VECTOR_BACKEND=chroma` 时生效） |
+| `DATABASE_URL` | 空 | 业务数据落库连接串；留空则整层跳过 |
 | `BM25_INDEX_PATH` | data/bm25/index.pkl | BM25 本地索引文件 |
 | `RETRIEVAL_TOP_K` | 20 | 单通道召回数量 |
 | `VECTOR_SEARCH_ENABLED` | true | 是否启用向量通道 |
@@ -149,7 +153,7 @@ splitter.py    递归字符切分，中文优先按句号、问号、感叹号�
   |            chunk_size=500, chunk_overlap=80（可配置）
   |            每个切片携带 doc_id / chunk_index / source_path
   |
-  |---> embeddings.py -> vectorstore.py   写入 Chroma 持久化目录
+  |---> embeddings.py -> vectorstore.py   写入 Milvus（或 Chroma 持久化目录）
   |
   |---> bm25.py                           jieba 分词后建 BM25 索引，pickle 落盘
 ```
@@ -159,7 +163,7 @@ splitter.py    递归字符切分，中文优先按句号、问号、感叹号�
 ```
 query
   |
-  |--> 向量通道：embed(query) -> Chroma 相似度检索 -> Top-K 候选
+  |--> 向量通道：embed(query) -> Milvus 相似度检索 -> Top-K 候选
   |
   |--> 关键词通道：jieba 分词 -> BM25 打分 -> Top-K 候选
   |
@@ -181,7 +185,7 @@ rerank.py   对融合后 Top-M 候选重排，取 Top-N；ONNX 会话按模型�
 | `loader.py` | 文档解析 | 解析失败不中断建库，记录到失败清单 |
 | `splitter.py` | 切分 | 中文标点优先，避免英文分句规则切碎中文 |
 | `embeddings.py` | 向量化 | **可插拔后端**：`fastembed`（ONNX 本地）/ `remote`（HTTP API）/ `fake`（测试用确定性哈希向量） |
-| `vectorstore.py` | 向量库封装 | 只暴露 `add` / `query` / `count`，屏蔽 Chroma 细节，便于替换 |
+| `vectorstore.py` | 向量库封装 | 只暴露 `add` / `query` / `count`；`MilvusVectorStore` 与 `ChromaVectorStore` 同签名，由 `create_vector_store` 按 `VECTOR_BACKEND` 分派。**这个窄接口在 v3 换库时得到验证：上层 RRF 与重排一行未改** |
 | `bm25.py` | 关键词检索 | jieba 精确模式分词；索引与向量库共享同一份 chunk id |
 | `hybrid.py` | 融合 | RRF，不做分数归一化 |
 | `rerank.py` | 重排 | ONNX cross-encoder / LLM / none 可切换；ONNX 会话按模型名缓存，失败退回 RRF 顺序 |
@@ -192,7 +196,7 @@ rerank.py   对融合后 Top-M 候选重排，取 Top-N；ONNX 会话按模型�
 
 > **为什么 embedding 后端要可插拔**：一是测试需要确定性、零网络依赖的假实现；二是本地 ONNX 模型与远程 API 各有适用场景（离线 vs 无本地算力），抽象一层可在不改业务代码的前提下切换；三是评测时需要对比不同 embedding 的召回差异。
 
-> **为什么索引产物不进入 Git**：`data/kb/` 是可审查的源语料，需要版本管理；`data/chroma/` 与 `data/bm25/` 是由配置和语料重建出的运行时产物，提交它们会放大仓库、制造平台兼容问题，并可能与当前 embedding 模型不一致。
+> **为什么索引产物不进入 Git**：`data/kb/` 是可审查的源语料，需要版本管理；Milvus 数据卷、`data/chroma/` 与 `data/bm25/` 是由配置和语料重建出的运行时产物，提交它们会放大仓库、制造平台兼容问题，并可能与当前 embedding 模型不一致。
 
 > **为什么缓存 ONNX reranker 会话**：cross-encoder 的模型加载和 ONNX Session 初始化远重于一次 Top-20 推理。产品查询与 Phase 13 批量评测都通过同一个 `rag/rerank.py` 入口，因此按模型名做进程内缓存可以避免逐 query 重载；它不缓存 query、候选或分数，不改变排序语义。
 
@@ -366,6 +370,20 @@ async def researcher_node(
 
 `POST /research` 除 `topic` 外还接受可选 `thread_id` 与 `resume`；恢复请求必须提供原 `thread_id`。
 
+配置 `DATABASE_URL` 后，接口层还提供 `GET /tasks`、`GET /tasks/{thread_id}` 与
+`GET /tasks/{thread_id}/report`。业务任务不是只在成功后插入一条历史记录，而是按同一
+`thread_id` 做状态迁移：
+
+```text
+收到请求并返回 start 前：running
+正常完成：             completed + report + citations + usage
+图执行 / 恢复异常：     failed
+恢复同一 thread_id：    更新原记录，不重复插入
+```
+
+落库仍是 fail-open：没有配置数据库或写入失败不阻断研究响应，但配置数据库后必须尽可能
+保留失败任务，否则“任务历史”只看得到成功样本，会造成观测偏差。
+
 后端调用 LangGraph `astream(stream_mode=["updates", "custom"], version="v2")`：
 
 - `updates` 流携带节点状态增量，后端将其合并为当前状态摘要并输出 `progress`
@@ -400,12 +418,17 @@ SDK v2 已将 v1 的 `FastMCP` 类更名为 `MCPServer`。服务器默认使用 
 ```text
 docker compose up --build
   │
-  ├─ indexer（一次性容器）
+  ├─ etcd + minio（Milvus 的元数据与对象存储依赖）
+  │    └─ 均 healthy 后 ──> milvus ──> milvus-data
+  │
+  ├─ postgres ──healthy──> migrate（一次性：alembic upgrade head）──> postgres-data
+  │
+  ├─ indexer（一次性容器，等 milvus healthy）
   │    ├─ data/kb（镜像内只读源语料）
-  │    ├─ Chroma ──────> chroma-data
+  │    ├─ 向量索引 ────> milvus-data
   │    └─ BM25 ────────> bm25-data
   │
-  └─ indexer 成功完成
+  └─ indexer 与 migrate 均成功完成
        └─ backend（FastAPI，非 root，/health）
             ├─ checkpoint-data
             ├─ trace-data
@@ -424,19 +447,20 @@ docker compose up --build
 ```
 1.  前端 POST /research {topic, thread_id?, resume?}
 2.  新任务生成 trace_id / thread_id 并创建初始 state；恢复任务按 thread_id 读取 checkpoint，以 `None` 输入继续
-3.  planner_node    -> core.llm.chat(json_mode=True) -> sub_questions[]
+3.  返回 start SSE 前按 thread_id 落库 running；恢复请求更新原记录
+4.  planner_node    -> core.llm.chat(json_mode=True) -> sub_questions[]
                        写 trace: node_start / llm_call / node_end
-4.  researcher_node -> asyncio.gather 并发处理子问题
+5.  researcher_node -> asyncio.gather 并发处理子问题
                        单个子问题: kb_search -> [是否降级] -> web_search -> achat 摘要
                        写 trace: retrieval / fallback / llm_call
-5.  should_continue -> critic
-6.  critic_node     -> achat(json_mode=True) -> quality_score / missing_aspects
-7.  should_revise   -> 分数不足且未超上限 -> 回到步骤 4（只查 missing_aspects）
-                    -> 否则 -> 步骤 8
-8.  writer_node     -> chat -> final_report（带角标引用）
-9.  每个节点提交前以 `durability="sync"` 写 checkpoint
-10. trace.summarize(trace_id) -> usage 汇总，通过 SSE 推送前端
-11. 前端渲染报告、Critic 过程、降级查询与 usage 面板
+6.  should_continue -> critic
+7.  critic_node     -> achat(json_mode=True) -> quality_score / missing_aspects
+8.  should_revise   -> 分数不足且未超上限 -> 回到步骤 5（只查 missing_aspects）
+                    -> 否则 -> 步骤 9
+9.  writer_node     -> chat -> final_report（带角标引用）
+10. 每个节点提交前以 `durability="sync"` 写 checkpoint
+11. trace.summarize(trace_id) -> usage 汇总；正常更新 completed，异常更新 failed
+12. 前端渲染报告、Critic 过程、降级查询与 usage 面板
 ```
 
 ---
@@ -514,8 +538,15 @@ deepresearch-agent/
 │
 ├── data/
 │   ├── kb/                    # 知识库原始文档
-│   ├── chroma/                # 向量库持久化
+│   ├── chroma/                # Chroma 后端的向量持久化（Milvus 后端时不用）
 │   └── checkpoints.sqlite     # 运行时 checkpoint（Git 忽略）
+│
+├── db/                        # 业务数据持久化（v3 新增）
+│   ├── models.py              # 4 张表的 SQLAlchemy 模型
+│   ├── session.py             # Engine 缓存与事务边界
+│   ├── repository.py          # 数据访问层（模型不生成 SQL）
+│   ├── persistence.py         # 安全落库入口（未配置则跳过、失败只告警）
+│   └── migrations/            # Alembic
 │
 ├── traces/                    # trace JSONL 落盘
 │
@@ -531,7 +562,9 @@ deepresearch-agent/
 | # | 决策点 | 选择 | 理由 | 放弃的方案及原因 |
 |---|--------|------|------|------------------|
 | 1 | Agent 框架 | LangGraph | 显式状态机，条件边与循环是一等公民，天然支持 checkpoint | 手写调度：无法体现框架能力；AutoGen：对话式抽象不适合确定性流程 |
-| 2 | 向量库 | Chroma | 嵌入式、零运维、Python 原生，Demo 规模足够 | Milvus：需独立部署，本项目数据量用不上；FAISS：缺少元数据过滤 |
+| 2 | 向量库 | **Milvus**（保留 Chroma 分支） | 企业侧更常见；适配器窄接口让上层零改动，换库后 18 项基准指标逐项一致 | **诚实边界：本项目 128 个切片，Chroma 完全够用**，换库是技术栈对口不是性能需要，代价是多三个容器。Chroma 分支保留用于 A/B 对照；FAISS：缺少元数据过滤 |
+| 2b | 业务数据存储 | PostgreSQL + SQLAlchemy + Alembic | 任务/报告/引用需要事后查询与追溯；有迁移脚本才能安全改表结构 | 只用 `create_all`：建得了新表改不了旧表，第一次改字段就卡住；不落库：无法回答"上周那次研究引用了什么" |
+| 2c | 落库失效策略 | fail-open（未配置则跳过，失败只告警） | 丢一条任务记录不是灾难，但因落库失败拿不到报告不可接受 | fail-closed：**合规类场景应当反过来**，没留痕的结论比报错更危险 |
 | 3 | Embedding | fastembed (ONNX) + bge-small-zh | **不依赖 torch**，镜像体积从 GB 级降到百 MB 级，CPU 推理够快 | sentence-transformers：拖入 torch，Docker 镜像过大 |
 | 4 | 混合融合 | RRF | 只用排名不用分数，免归一化、免调参、跨查询稳定 | 加权求和：需分数归一化，对分布敏感 |
 | 5 | 重排 | 可切换（ONNX cross-encoder / LLM rerank） | 前者快且便宜，后者零额外模型依赖；对照实验可量化二者差异 | 付费 Rerank API：成本不可控且无法离线 |

@@ -18,18 +18,18 @@
 | 14 | MCP Server | M3 | ✅ 功能完成 |
 | 15 | 工程化（Docker / CI） | M2 | ✅ 功能完成 |
 | 16 | 交付物（README / 架构图 / 简历映射 / 口述稿） | M1—M3 | 🟨 部分完成 |
-| 17 | 向量库迁移 Chroma → Milvus | M4 | 🟨 代码完成（compose 待补） |
-| 18 | 知识库语料替换与评测重跑 | M4 | ⬜ 未开始 |
-| 19 | 关系数据库层（PostgreSQL / SQLAlchemy / Alembic） | M4 | ⬜ 未开始 |
-| 20 | 可观测 exporter + BM25 增量 + 接口鉴权 | M5 | ⬜ 未开始 |
-| 21 | fork 基线冻结与交付物更新 | M4—M5 | ⬜ 未开始 |
+| 17 | 向量库迁移 Chroma → Milvus | M4 | ✅ 已完成 |
+| 18 | 知识库语料替换与评测重跑 | ~~M4~~ **P2** | ⏸ 降级为可选（见 `UPGRADE_V3.md` §2.1） |
+| 19 | 关系数据库层（PostgreSQL / SQLAlchemy / Alembic） | M4 | ✅ 已完成 |
+| 20 | 可观测 exporter + BM25 增量 + 接口鉴权 | M5 | 🟨 代码全部完成；仅缺 T20.3 看板截图（需真实后端） |
+| 21 | fork 基线冻结与交付物更新 | M4—M5 | 🟨 文档已更新（改名/推送待作者） |
 
 **里程碑定义**
 
 - **M1 可投最低线**：Phase 10—12 + Phase 16 的 README 部分完成 → GitHub 上线，简历可挂链接
 - **M2 完整线**：+ Phase 13、15 → 有评测数据与工程化证据
 - **M3 加分线**：+ Phase 14 → MCP Server 与 Demo 录制
-- **M4 技术栈对口线（v3）**：+ Phase 17—19、21 → 企业档向量库、真实语料、关系数据库落库，并冻结出金融版的 fork 基线
+- **M4 技术栈对口线（v3）**：+ Phase 17、19、21 → 企业档向量库 + 关系数据库落库（Phase 18 换语料已降为 P2 可选）
 - **M5 工程完备线（v3）**：+ Phase 20 → 集中式可观测、增量索引、接口鉴权
 
 ---
@@ -212,7 +212,7 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 > **本 Phase 不换语料** —— 控制变量，见 `UPGRADE_V3.md` §4.2。
 
 - [x] T17.0 记录基线：`pytest --collect-only` 数量、全量通过情况，填入 `UPGRADE_V3.md` §7
-- [ ] T17.1 `docker-compose.yml` 增加 milvus + etcd + minio 三个服务，配 healthcheck
+- [x] T17.1 `docker-compose.yml` 增加 milvus + etcd + minio 三个服务，配 healthcheck（`docker compose config` 校验通过；**完整启动链未实跑**）
 - [x] T17.2 `rag/vectorstore.py` 新增 `MilvusVectorStore`，方法签名与 `ChromaVectorStore` 完全一致（`add` / `query` / `count`）
 - [x] T17.3 `core/config.py`：`chroma_dir` / `chroma_collection` → `milvus_uri` / `milvus_collection`，同步更新 `.env.example` 与 `TECH_STACK.md`
 - [x] T17.4 `rag/pipeline.py:74`、`:157` 两处实例化改用新实现
@@ -230,10 +230,15 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 
 ---
 
-## Phase 18: 知识库语料替换与评测重跑
+## Phase 18: 知识库语料替换与评测重跑（⏸ P2 可选）
 
-> 目标：修掉"深度研究系统检索自己的架构文档"这个硬伤。
-> **本 Phase 不动代码**，只换数据与重跑评测。
+> **2026-09-08 降级为可选。** 初稿把它排成 M4 必做，依据是"语料与查询同源会削弱评测可信度"——
+> 该依据经核实**不成立**：R 轨跑的是 C-MTEB 公开基准，与 `data/kb` 无关。
+> 换语料只有观感收益、无技术后果，且保留自述文档有"零准备可复现 + 答案可验证"的反面论证。
+> 完整论证见 `UPGRADE_V3.md` §2.1。
+>
+> 若将来要做：**只能换中文语料**（embedding 与 reranker 都是中文模型），
+> 且需同步改 `tests/test_rag_pipeline.py:32` 的 `13_rrf.md` 断言与多处文档示例。
 
 - [ ] T18.1 确定语料方向并落地下载（🔶 **阻塞决策**，见 `UPGRADE_V3.md` §8）
 - [ ] T18.2 建立来源清单：每篇记录标题、来源 URL、获取日期
@@ -256,13 +261,13 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 > 目标：补齐全项目零业务数据持久化这个空洞。
 > 本 Phase 产出的 SQLAlchemy / Alembic / session / repository 骨架，是金融版直接继承的部分。
 
-- [ ] T19.1 `docker-compose.yml` 增加 postgres 服务 + healthcheck，backend 加 `depends_on: service_healthy`
-- [ ] T19.2 `db/models.py`：`research_tasks` / `reports` / `citations` / `sub_questions` 四张表（列定义见 `UPGRADE_V3.md` §4.3）
-- [ ] T19.3 `db/migrations/`：Alembic 初始化 + 首个迁移
-- [ ] T19.4 `db/repository.py`：固定模板的数据访问层，**模型不生成 SQL**
-- [ ] T19.5 图运行结束后落库：任务、报告、子问题、引用（含 `retrieval_score` 与 `rank`）
-- [ ] T19.6 db 层测试：CRUD、级联、事务回滚、`alembic upgrade head` 从空库建全表
-- [ ] T19.7 CI 增加 PostgreSQL service container
+- [x] T19.1 `docker-compose.yml` 增加 postgres 服务 + healthcheck，backend 加 `depends_on: service_healthy`
+- [x] T19.2 `db/models.py`：`research_tasks` / `reports` / `citations` / `sub_questions` 四张表（列定义见 `UPGRADE_V3.md` §4.3）
+- [x] T19.3 `db/migrations/`：Alembic 初始化 + 首个迁移
+- [x] T19.4 `db/repository.py`：固定模板的数据访问层，**模型不生成 SQL**
+- [x] T19.5 图运行结束后落库：任务、报告、子问题、引用（含 `retrieval_score` 与 `rank`）
+- [x] T19.6 db 层测试：CRUD、级联、事务回滚、`alembic upgrade head` 从空库建全表
+- [x] T19.7 CI 增加 PostgreSQL service container
 
 **验收标准**
 
@@ -276,12 +281,12 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 
 > 目标：工程完备度补齐。三项互相独立，可分开验收、可按时间砍。
 
-- [ ] T20.1 `core/trace.py` 接 Langfuse 或 OTel exporter（🔶 待决策），**事件模型不变**
-- [ ] T20.2 本地 JSONL 保留为 fallback，未配置 exporter 时完全离线可跑
-- [ ] T20.3 trace 视图截图放进 README
-- [ ] T20.4 `rag/bm25.py` 支持增量追加，不再全量覆盖重建
-- [ ] T20.5 `backend/api.py` 扩到任务生命周期接口（发起 / 查询 / 流式 / 取报告）
-- [ ] T20.6 API Key 鉴权，调用主体写入 trace 事件与 `research_tasks`
+- [x] T20.1 接 **OpenTelemetry** exporter（`core/otel.py`），事件模型一行未改；Laminar / Langfuse 均可作为后端
+- [x] T20.2 本地 JSONL 保留为主路径，未配置 `OTEL_ENDPOINT` 时完全离线可跑
+- [ ] T20.3 trace 视图截图放进 README（**需作者注册 Laminar/Langfuse 云端免费账号跑一次**；本地无服务无法产出）
+- [x] T20.4 `rag/bm25.py` 支持增量追加，不再全量覆盖重建
+- [x] T20.5 `backend/api.py` 扩到任务生命周期接口（发起 / 查询 / 流式 / 取报告）；任务开始落 `running`、正常完成落 `completed`、异常落 `failed`，恢复同一 `thread_id` 更新原记录
+- [x] T20.6 API Key 鉴权，调用主体写入 trace 事件与 `research_tasks`
 
 **验收标准**
 
@@ -297,11 +302,11 @@ T2Reranking 在 C-MTEB 的官方主指标本就是 MAP，正因为它是多正�
 
 - [ ] T21.1 Phase 19 完成后打 tag（建议 `v3-fork-base`），作为合规审查 Agent 的分叉基线
 - [ ] T21.2 分叉出合规版仓库，其 README 写明 fork 来源与迁移范围（**血缘声明，见 `UPGRADE_V3.md` §3.1**）
-- [ ] T21.3 更新本项目 `README.md`：Milvus、新语料、数据库、新旧评测对照
-- [ ] T21.4 更新 `ARCHITECTURE.md`：向量库与持久化两处
-- [ ] T21.5 更新 `TECH_STACK.md` v3 依赖变更
-- [ ] T21.6 更新 `RESUME_MAPPING.md`：新增 bullet 需指到文件与数据来源；**不得与合规版重复声明同一份工作量**
-- [ ] T21.7 更新 `INTERVIEW_GUIDE.md`：补 Milvus 选型、控制变量迁移顺序、数据表设计、两个项目血缘关系的答法
+- [x] T21.3 更新本项目 `README.md`：Milvus、新语料、数据库、新旧评测对照
+- [x] T21.4 更新 `ARCHITECTURE.md`：向量库与持久化两处
+- [x] T21.5 更新 `TECH_STACK.md` v3 依赖变更
+- [x] T21.6 更新 `RESUME_MAPPING.md`：新增 bullet 需指到文件与数据来源；**不得与合规版重复声明同一份工作量**
+- [x] T21.7 更新 `INTERVIEW_GUIDE.md`：补 Milvus 选型、控制变量迁移顺序、数据表设计、两个项目血缘关系的答法
 - [ ] T21.8 仓库改名 `deepresearch-agent`（`RELEASE_CHECKLIST.md` 已备好）
 
 **验收标准**

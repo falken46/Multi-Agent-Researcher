@@ -30,7 +30,7 @@ Critic 没有让 Writer 兼任。写作节点自己评价自己，分数容易�
 
 ### 可直接口述
 
-检索层不是直接调用一个向量库，而是拆成文档加载、递归切分、embedding、Chroma 向量召回、BM25 关键词召回、RRF 融合和可选 rerank。向量召回解决语义相近但措辞不同的问题，BM25 对专有名词、型号和缩写更敏感。两路分数量纲不同，所以融合时没有直接加权求和，而用只依赖名次的 RRF，减少跨查询归一化和调参问题。
+检索层不是直接调用一个向量库，而是拆成文档加载、递归切分、embedding、Milvus 向量召回、BM25 关键词召回、RRF 融合和可选 rerank。向量召回解决语义相近但措辞不同的问题，BM25 对专有名词、型号和缩写更敏感。两路分数量纲不同，所以融合时没有直接加权求和，而用只依赖名次的 RRF，减少跨查询归一化和调参问题。
 
 Rerank 和召回承担不同职责：召回先保证候选不要漏，rerank 只能对候选池重新排序，无法救回没被召回的文档。我把向量、BM25、融合和重排都做成可切换配置，因为“理论上互补”不等于在当前数据上一定提升。
 
@@ -41,7 +41,7 @@ Rerank 和召回承担不同职责：召回先保证候选不要漏，rerank 只
 ### 追问抓手
 
 - 代码证据：`rag/pipeline.py`、`rag/hybrid.py`、`rag/rerank.py`、`tools/kb_search.py`。
-- 为什么用 Chroma：当前是小规模、单机、嵌入式场景，零运维优先。
+- 为什么换 Milvus：**不是性能需要**（128 个切片 Chroma 够用），是为了走通企业级向量库的部署与索引配置；靠适配器窄接口隔离，上层 RRF 与重排一行未改。Chroma 分支保留用于 A/B 对照。
 - 为什么保留无收益模块：保留可切换实验能力，不默认启用，也不把局部结果外推。
 
 ## 4. 三分钟：评测工程与“负向结果”
@@ -84,15 +84,32 @@ checkpoint 与 trace 解决的是两个不同问题：checkpoint 保存图运行
 
 系统对外有两类入口。FastAPI 加 SSE 服务 Web 前端；MCP Server 面向 LLM 客户端，暴露 `deep_research` 和只读 `kb_search` 两个结构化工具。MCP 的价值不只是换一种 RPC，而是让客户端能统一发现工具描述、输入输出 schema 和行为属性。我用官方 Python SDK v2 实现，并通过官方客户端启动真实 stdio 子进程，验证了握手、工具发现和 `kb_search` 调用。Claude Code 已能识别项目配置，但把工具结果发送给外部模型属于数据出站，因此我没有把它冒充成本地协议验收。
 
-交付层有 backend、frontend 两个多阶段镜像，都按 `uv.lock` 安装依赖并以非 root 用户运行。Compose 另外定义一次性 indexer：先把 44 篇产品知识库构建成 128 个 chunk，确认 Chroma 与 BM25 各 128 条后再启动 backend；后端 `/health` 通过后才启动 frontend。索引、checkpoint、trace 和模型缓存都放命名卷。这样初始化失败会在正确阶段暴露，也避免服务在半成品索引上接流量。
+交付层有 backend、frontend 两个多阶段镜像，都按 `uv.lock` 安装依赖并以非 root 用户运行。Compose 另外定义一次性 indexer：先把 44 篇产品知识库构建成 128 个 chunk，确认向量索引与 BM25 各 128 条后再启动 backend；后端 `/health` 通过后才启动 frontend。索引、checkpoint、trace 和模型缓存都放命名卷。这样初始化失败会在正确阶段暴露，也避免服务在半成品索引上接流量。
 
-CI 在 push 和 pull request 上执行锁文件同步、Ruff 与 `pytest -m "not live"`，不注入任何 API Key。真实网络能力不是靠普通 CI 验证，而是单独的 `live` smoke。本机同款命令目前是 148 项离线测试通过，Docker 干净命名卷启动链和两个健康检查也已验证。远端 GitHub Actions 要等我提交推送后才能说绿色，这个边界我会明确保留。
+CI 在 push 和 pull request 上执行锁文件同步、Ruff 与 `pytest -m "not live"`，不注入任何 API Key。真实网络能力不是靠普通 CI 验证，而是单独的 `live` smoke。本机同款命令目前是 208 项离线测试通过。Docker 干净命名卷启动链和两个健康检查是 **Chroma 时期**验证的；加入 Milvus、PostgreSQL 与迁移服务后的新启动链目前只过了 `docker compose config`，**还没实跑过**，这个边界我会讲清楚。远端 GitHub Actions 要等我提交推送后才能说绿色，这个边界我会明确保留。
 
 ### 追问抓手
 
 - 代码证据：`mcp_server/server.py`、`.mcp.json`、`Dockerfile.*`、`docker-compose.yml`、`.github/workflows/ci.yml`。
 - 为什么多阶段：构建工具和缓存不进入运行镜像；当前两个镜像仍约 324 MB，后续可拆依赖组。
 - 为什么不在 CI 放 Key：稳定、可复现、fork 安全；真实能力由显式 live 验证补充。
+
+## 6b. 两分钟：向量库迁移与数据库层（v3）
+
+### 可直接口述
+
+v3 做了两件补短板的事，都不增加新功能。
+
+第一件是把向量库从 Chroma 换成 Milvus。这里我想强调的不是"我会用 Milvus"，而是**怎么确认换库没把系统搞坏**。做法是先换库、不换语料，把变量隔离：两个后端各自建索引，跑同一套 100 题公开基准，R1/R2/R3 共 18 项指标逐项比对，结果完全一致，最大偏差 0.000045，就是报告四位小数的精度。R2 是纯 BM25、不经过向量库，逐位相同，正好当对照组。另一个收获是验证了当初的接口设计——`vectorstore.py` 只暴露三个方法，换库时上层的 RRF 融合和重排代码一行没改。
+
+第二件是补上业务数据落库。之前整个项目零业务持久化：一次研究跑完，问题、报告、引用全都只在内存和 trace 文件里。现在用 PostgreSQL 存四张表，SQLAlchemy 做 ORM，Alembic 管迁移。有三个设计点想说：引用表**必须存当时的检索名次**，否则索引一重建就再也回答不了"当时为什么是这条排第一"；落库按 thread_id 幂等，因为断点续跑会重复进入同一任务；任务在返回 start 前写成 running，正常结束改 completed，异常改 failed，避免历史库只留下成功样本。
+
+### 追问抓手
+
+- **迁移踩了三个坑**：① Milvus 在 COSINE 下返回的 `distance` 就是相似度，Chroma 返回的是距离，照抄换算会把排序倒过来且不报错；② 新连接里集合是 released 状态，search 前要 `load_collection()`，这个坑单元测试抓不到、是 A/B 对照抓出来的；③ 环境变量 `MILVUS_URI` 和 pymilvus 自己撞名，改成了 `MILVUS_ENDPOINT`。
+- **为什么加 Alembic 不只是建表**：`create_all` 只能建新表、改不了已有表，拿它当迁移方案第一次改字段就卡住。
+- **落库失败怎么办**：fail-open，只告警不打断。但这是场景决定的——同一层放到合规审查场景就该做成 fail-closed，一份没留痕的结论比报错危险得多。
+- **边界**：数据库层目前在 SQLite 上验证；真实 PostgreSQL 由 CI 的独立 job 跑，远端没绿之前不声明通过。
 
 ## 7. 一分钟：项目与实习如何互补
 
@@ -104,9 +121,16 @@ CI 在 push 和 pull request 上执行锁文件同步、Ruff 与 `pytest -m "not
 
 拆节点是为了让职责、状态变化和失败边界可观测；尤其 Critic 的输出要作为条件边依据，一个大 Prompt 很难独立测试和恢复。代价是调用次数与状态管理复杂度上升。
 
-**为什么不用 LangSmith？**
+**为什么不用 LangSmith？为什么最后选了 OpenTelemetry？**
 
-我希望项目离线可运行且 trace 格式受自己控制，所以先用 JSONL。它满足当前审计和复算；团队协作、线上采样和可视化需求上来后，再考虑 LangSmith 或 OpenTelemetry。
+先用 JSONL 是因为要保证项目离线可运行、trace 格式受自己控制。v3 加导出时，
+真正的选择不是"Langfuse 还是 Laminar"，而是"绑标准还是绑 SDK"——
+Laminar 是 OTel 原生、Langfuse 也接受 OTLP，所以我按 OTel 埋点，
+后端只改 endpoint 和 header 就能换，代码不动。这和我换向量库时用窄接口隔离供应商是同一个思路。
+
+**必须说清的边界**：我只验证了自己这一端（用官方 `InMemorySpanExporter` 走真实 SDK
+读回 span，断言父子关系和事件挂载），**没有连过真实的 Langfuse 或 Laminar 实例**，
+所以我不会说"我用过 Langfuse"。
 
 **RRF 没有普遍收益，项目是不是失败了？**
 
@@ -131,5 +155,6 @@ R 轨只有公开集的 100 题子集，P/Q 没有正式付费 raw，知识库�
 - 能不看文档说出 RRF 的正负结果：MRR@5 `+0.0538`，nDCG@5 `+0.0105`，MAP@20 `-0.0059`。
 - 能解释为什么多正例数据不能只看 Hit@5 / MRR@5。
 - 能说清“已实现并测试”和“已证明真实收益”的区别。
-- 能指出 148 项测试证明的是离线功能回归，不是真实模型准确率或联网稳定性。
+- 能指出 208 项测试证明的是离线功能回归，不是真实模型准确率或联网稳定性。
+- 能指出数据库层是在 SQLite 上验证的；真实 PostgreSQL 由 CI 的 `database` job 承担，远端没跑过就不说已通过。
 - 能主动说明远端 CI、Claude Code 数据出站调用和 P/Q 付费评测仍待作者执行。

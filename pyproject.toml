@@ -28,6 +28,11 @@ dependencies = [
     "mcp[cli]>=2.0,<3.0",
     "pymilvus>=2.5.0",
     "milvus-lite>=2.5.0",
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
+    "psycopg[binary]>=3.2",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
 ]
 
 [dependency-groups]

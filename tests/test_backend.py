@@ -47,15 +47,17 @@ def test_research_request_requires_thread_id_when_resuming() -> None:
 def test_research_endpoint_streams_sse_and_forwards_resume_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, str | None, bool]] = []
+    calls: list[tuple[str, str | None, bool, str]] = []
 
     async def fake_stream(
         topic: str,
         *,
         thread_id: str | None = None,
         resume: bool = False,
+        actor: str = "anonymous",
     ):
-        calls.append((topic, thread_id, resume))
+        # Phase 20 起接口会把调用主体透传给流程，未开鉴权时为 anonymous
+        calls.append((topic, thread_id, resume, actor))
         yield {"event": "start", "data": json.dumps({"node": "start"})}
         yield {"event": "complete", "data": json.dumps({"node": "end"})}
 
@@ -77,7 +79,7 @@ def test_research_endpoint_streams_sse_and_forwards_resume_fields(
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: start" in body
     assert "event: complete" in body
-    assert calls == [("test topic", "checkpoint-thread", True)]
+    assert calls == [("test topic", "checkpoint-thread", True, "anonymous")]
 
 
 def test_research_endpoint_rejects_blank_topic() -> None:
