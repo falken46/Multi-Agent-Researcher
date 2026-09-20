@@ -417,7 +417,7 @@ MCP 层只做协议适配、输入约束和结构化输出，不直接调用 LLM
 
 SDK v2 已将 v1 的 `FastMCP` 类更名为 `MCPServer`。服务器默认使用 stdio，项目级 `.mcp.json` 负责让 Claude Code 等客户端以 `uv run python -m mcp_server.server` 启动进程。
 
-> **为什么要做 MCP Server**：实习经历中作者是 MCP 工具的**调用方**，做 Server 才补上**生产方**视角。面试中"MCP 与普通 HTTP API 的区别"是高频问题，亲手实现过才答得清楚 —— 差异在于 MCP 面向 LLM 客户端标准化了工具描述与发现方式，并由客户端统一管理连接生命周期与权限，而普通 HTTP API 的接口契约由业务方各自定义、需要为每个客户端单独适配。
+> **为什么要做 MCP Server**：MCP 面向 LLM 客户端标准化工具描述、发现方式和连接生命周期；普通 HTTP API 的接口契约由业务方各自定义，通常需要为不同客户端单独适配。项目同时保留 HTTP/SSE 与 MCP 两种入口，用于验证同一业务能力在不同协议边界下的复用方式。
 
 ### 2.6 容器交付层（Phase 15）
 
@@ -483,8 +483,8 @@ deepresearch-agent/
 ├── .dockerignore
 ├── .github/workflows/ci.yml   # Ruff + 离线 pytest
 ├── README.md
-├── PRD.md / ARCHITECTURE.md / TECH_STACK.md / TASKS.md
-├── TESTING.md / EVAL.md / OBSERVABILITY.md / RESUME_MAPPING.md
+├── PRD.md / ARCHITECTURE.md / TECH_STACK.md
+├── TESTING.md / EVAL.md / OBSERVABILITY.md
 │
 ├── core/                      # 【v2 新增】基础设施层
 │   ├── config.py
@@ -563,7 +563,7 @@ deepresearch-agent/
 
 ## 5. 关键技术决策（ADR）
 
-> 面试高频追问区。每条都要能说出"为什么不选另一个"。
+> 每项选择同时记录采用理由、放弃方案与适用边界，避免技术栈只剩名词清单。
 
 | # | 决策点 | 选择 | 理由 | 放弃的方案及原因 |
 |---|--------|------|------|------------------|

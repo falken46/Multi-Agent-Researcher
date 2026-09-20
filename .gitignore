@@ -54,6 +54,15 @@ eval/reports/raw/
 # 个人学习材料，不对外发布
 docs/study/
 
+# 本地开发与求职辅助材料，不属于公开产品交付物
+AGENTS.md
+CLAUDE.md
+TASKS.md
+UPGRADE_V3.md
+RELEASE_CHECKLIST.md
+RESUME_MAPPING.md
+INTERVIEW_GUIDE.md
+
 # 本地学习手册站点（与 docs/study 同属个人材料，不对外发布）
 docs/index.html
 docs/_sidebar.md

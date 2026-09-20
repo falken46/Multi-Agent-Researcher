@@ -72,9 +72,9 @@
 | httpx | FastAPI 测试客户端（仅开发依赖；Phase 12 的同步检索工具通过 `asyncio.to_thread` 接入异步节点） |
 | ruff | Lint（`E4` / `E7` / `E9` / `F` / `I`），本地与 CI 使用；当前锁定 `0.16.4` |
 
-### 2.4 v3 变更（Phase 17 / 19 已完成，2026-09-09）
+### 2.4 v3 变更（Phase 17—20 已完成）
 
-> 详见 `UPGRADE_V3.md`。v3 是技术栈升级，**不引入新的研究能力**。
+> v3 主要升级存储、可观测与接口工程，**不引入新的研究能力**。
 
 **新增**
 
@@ -85,7 +85,7 @@
 | **sqlalchemy** `2.0.52` | ORM | ✅ 已接入。4 张表，方言中立（不用 JSONB / ARRAY），同一套模型 SQLite 与 PostgreSQL 都能跑 |
 | **alembic** `1.19.2` | 数据库迁移 | ✅ 已接入。⚠️ `alembic.ini` **必须纯 ASCII** —— 它用 `encoding="locale"` 读文件，中文 Windows 上是 GBK，非 ASCII 字符会在 configparser 里抛 UnicodeDecodeError，报错点离配置很远 |
 | **psycopg[binary]** `3.3.5` | PostgreSQL 驱动 | ✅ 已接入 |
-| **opentelemetry-sdk** `1.44.0` + **opentelemetry-exporter-otlp-proto-http** | 可观测导出 | ✅ 已接入。**选 OTel 标准而非绑定某家 SDK**：Laminar 是 OTel 原生、Langfuse 也吃 OTLP，换后端只改 endpoint 与 headers。`core/trace.py` 的事件模型一行未改，JSONL 仍是主路径 |
+| **opentelemetry-sdk** `1.44.0` + **opentelemetry-exporter-otlp-proto-http** | 可观测导出 | ✅ 已接入。**选 OTel 标准而非绑定某家 SDK**：Laminar 是 OTel 原生、Langfuse 也吃 OTLP，换后端只改 endpoint 与 headers。`core/trace.py` 的事件模型一行未改，JSONL 仍是主路径。2026-09-20 已用 Langfuse Cloud 完成一次真实 OTLP Trace 验证，证据见 `docs/langfuse-trace.png`；未使用 Langfuse 专用 SDK |
 
 **移除**
 
@@ -124,7 +124,7 @@ OTEL_TIMEOUT=10
 |------|--------|
 | pymilvus | 主版本升级会改变 collection schema 与索引参数，需重建索引 |
 | alembic | 迁移脚本一旦执行过就不能改写，只能追加新迁移 |
-| **迁移顺序** | **必须先换向量库（保持旧语料）再换语料** —— 两个一起换，出了差异分不清是适配器 bug 还是语料变化。见 `UPGRADE_V3.md` §4.2 |
+| **迁移顺序** | **先换向量库并保持旧语料**，用同一公开基准完成 A/B 对照；若同时更换语料，出现差异时无法区分适配器问题与数据分布变化 |
 
 ---
 
@@ -244,7 +244,7 @@ uv sync --group dev
 - 两个 Dockerfile 均从 `uv.lock` 执行 `uv sync --frozen --no-dev --no-install-project`，最终阶段不保留 uv 二进制和依赖下载缓存。
 - 两个运行阶段统一使用 UID/GID `10001` 的非 root 用户 `app`，并提供容器健康检查。
 
-当前 `pyproject.toml` 尚未把前后端运行依赖拆成独立组，因此两个镜像都携带完整运行依赖，实测约 324 MB。对秋招 Demo 而言，单一锁文件和低维护成本优先于进一步压缩；如果未来需要生产发布，再拆分 frontend/backend dependency group。
+当前 `pyproject.toml` 尚未把前后端运行依赖拆成独立组，因此两个镜像都携带完整运行依赖，实测约 324 MB。当前优先保持单一锁文件和低维护成本；如果进入更严格的生产发布流程，再拆分 frontend/backend dependency group。
 
 ### 7.2 Compose 启动与持久化
 

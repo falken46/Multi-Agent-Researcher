@@ -2,7 +2,7 @@
 
 基于 LangGraph 的工程化多智能体研究助手：本地混合检索不足时联网，Critic 定向补查，并以 SSE、SQLite Checkpoint 和任务级 JSONL trace 支撑可观测、可恢复的 Markdown 报告生成流程。
 
-> 当前代码基线已实现 Phase 10—15 的秋招功能范围，包括公开检索评测、MCP Server、Docker Compose 与离线 CI。P/Q 真实付费运行已转为秋招后可选实验，本文只填写由结构化 raw 复算的公开检索数字，不提前填写质量提升率或真实任务加速比。
+> 当前代码基线已覆盖公开检索评测、MCP Server、PostgreSQL、OpenTelemetry、Docker Compose 与离线 CI。P/Q 真实付费对照保留为可选实验；本文只填写由结构化 raw 或 trace 复算的数字，不提前填写质量提升率或真实任务加速比。
 
 ## 核心能力
 
@@ -12,7 +12,7 @@
 - **有边界的质量返工**：Critic 只让 Researcher 补查明确缺口，并通过返工上限和分数停滞检测防止死循环。
 - **可观测、可恢复**：JSONL trace 记录节点、token、估算成本、耗时、降级和返工事件；SQLite Checkpoint 通过稳定 `thread_id` 支持 API 从最近 checkpoint 恢复。
 - **业务数据落库**：PostgreSQL 保存任务、子问题、报告与引用来源（含检索名次），任务按 `running → completed / failed` 更新并用 `thread_id` 保持恢复幂等；SQLAlchemy + Alembic 管理表结构与迁移，未配置 `DATABASE_URL` 时整层静默跳过。
-- **OpenTelemetry 导出**：事件流映射为带父子关系的 span（任务为根、Agent 节点为子、llm_call/降级/返工为 span event），可指向任意 OTLP 后端（Laminar、Langfuse 等）；**本地 JSONL 仍是主路径**，未配置 endpoint 时完全不介入。
+- **OpenTelemetry 导出**：事件流映射为带父子关系的 span（任务为根、Agent 节点为子、llm_call/降级/返工为 span event），可指向任意 OTLP 后端（Laminar、Langfuse 等）；**本地 JSONL 仍是主路径**，未配置 endpoint 时完全不介入。已用 Langfuse Cloud 完成一次真实 OTLP 接收验证。
 - **调用主体可追溯**：API Key 鉴权解析出的 actor 写入 trace 事件与任务记录 —— v2 记了模型/token/成本，唯独缺"是谁在调"。
 - **增量关键词索引**：BM25 缓存分词结果，追加文档只对新增内容分词（引擎因 IDF 依赖全语料仍需重建，这是 `rank_bm25` 的限制）。
 - **HTTP + MCP 双入口**：FastAPI/SSE 面向 Web 前端，官方 MCP SDK v2 暴露 `deep_research` 与只读 `kb_search`，供 LLM 客户端发现和调用。
@@ -311,6 +311,14 @@ uv run python -m mcp_server.server
 
 这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、MCP schema/协议入口、Docker/Compose/CI 配置契约、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
 
+### 真实 Langfuse Trace
+
+下面是一次真实研究任务通过通用 OTLP HTTP exporter 写入 Langfuse Cloud 的 Trace。根 Span 下能看到 Planner、Researcher、Critic 与 Writer；第一次 Researcher 因本地模型冷启动超时而失败，随后重试成功，因此失败标记与重试链路也被完整保留。
+
+![Langfuse OpenTelemetry Trace](docs/langfuse-trace.png)
+
+该截图用于证明 endpoint、鉴权、OTLP 协议和 Span 层级在真实后端可用，**不是性能基准**。这次单任务共记录 8 次 LLM 调用、32,347 tokens、5 次联网降级、约 ¥0.0431 估算成本和 4 分 51 秒端到端耗时；其中冷启动超时显著放大了总耗时，不能外推为常态性能。
+
 | 维度 | 当前已有证据 | 现在可以得出的结论 | 边界 / 可选后续 |
 |---|---|---|---|
 | 功能回归（v2 基线） | 148 项离线测试 | v2 约定功能路径可重复通过 | 真实 LLM / 搜索端到端完成率 |
@@ -322,10 +330,10 @@ uv run python -m mcp_server.server
 | 功能回归（v3） | 210 项离线测试（148 基线 + 62 新增） | Milvus 适配器、数据库层、OTel 导出、增量索引、鉴权、前端凭据透传与任务生命周期在约定场景下可重复通过 | — |
 | 向量库迁移 | 100 题公开基准上 R1/R2/R3 共 18 项指标，Milvus 与 Chroma 记录逐项一致（最大偏差 0.000045，即报告的四位小数精度） | 换向量库没有改变检索结果，迁移正确 | R4 未重跑：它只重排 R3 的同一候选集，且需下载 cross-encoder 权重 |
 | 数据库层 | 11 项 db 测试（SQLite）；真实 PostgreSQL 容器完成两版 Alembic upgrade，`GET /tasks` 返回 200 | CRUD 语义在 SQLite 可重复通过；PostgreSQL 建表、连接和查询入口已在本机跑通 | 同一套 db 测试在真实 PostgreSQL 上的自动回归仍由 CI `database` job 承担，远端未跑过不声明绿色 |
-| OTel 导出 | 12 项测试，用官方 `InMemorySpanExporter` 走真实 SDK 读回 span | span 父子关系、无配对事件挂载、异常兜底、多 trace 隔离均正确 | **未验证真实后端能否收下这些 span** —— 需要一个真实 OTLP endpoint；看板截图同理尚未产出 |
+| OTel 导出 | 12 项内存 exporter 测试 + 1 次 Langfuse Cloud 真实任务；截图见上方 | span 父子关系、事件挂载、真实 endpoint 鉴权与 OTLP 接收均已跑通；失败后重试在同一 Trace 可见 | 只验证了一个真实任务，不代表生产稳定性；接的是通用 OTLP，不是 Langfuse 专用 SDK |
 | 增量索引 | 8 项测试，含"增量结果与全量重建等价"与分词调用次数断言 | 追加不改变排序与分数，且旧文档不重复分词 | 只在 128 切片规模验证；这是增量分词不是增量 BM25 |
 | 接口、鉴权与生命周期 | 17 项测试（401/404/503、前端请求头、401 页面提示、actor 落库、`running/completed/failed`、恢复幂等） | 调用主体、前后端鉴权契约、任务状态与历史查询接口行为符合约定 | 明文 key、无轮换、无权限分级，不是生产级方案 |
-| 容器交付 | **v3 本机实跑**：PostgreSQL 两版迁移成功；44 篇 → 128 chunk，Milvus / BM25 各 128 条；backend / frontend 均 healthy 且 HTTP 200 | `postgres → migrate` 与 `etcd + minio → milvus → indexer → backend → frontend` 两条门控链成立 | 当前 `.env` 未启用 API 鉴权，未运行真实付费研究；中文路径需用文档中的 buildx 绕过 Compose Bake |
+| 容器交付 | **v3 本机实跑**：PostgreSQL 两版迁移成功；44 篇 → 128 chunk，Milvus / BM25 各 128 条；backend / frontend 均 healthy 且 HTTP 200 | `postgres → migrate` 与 `etcd + minio → milvus → indexer → backend → frontend` 两条门控链成立 | Compose 实跑未覆盖 API 鉴权；真实付费研究由宿主机单独完成；中文路径需用文档中的 buildx 绕过 Compose Bake |
 
 Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query，将 positive 与 hard negative 合并为 1,664 个 passage 的共享池，并直接沿用公开 qrels。正式 R 轨生成 400 条结构化观测：
 
@@ -383,13 +391,12 @@ tools/        KB Search / Web Search / Web Fetch 等 IO 工具
 
 ## 文档导航
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md)：分层架构、状态机与后续演进设计（其中部分目录属于未来 Phase）。
+- [`ARCHITECTURE.md`](ARCHITECTURE.md)：分层架构、状态机、容器拓扑与关键技术决策。
+- [`PRD.md`](PRD.md)：产品范围、用户场景、功能与非功能需求。
 - [`TECH_STACK.md`](TECH_STACK.md)：技术选型、配置来源和运行约束。
-- [`TASKS.md`](TASKS.md)：Phase 10—16 的实施顺序与验收标准。
-- [`EVAL.md`](EVAL.md)：Phase 13 评测设计、R 轨真实结果与 P/Q 轨执行边界。
-- [`RESUME_MAPPING.md`](RESUME_MAPPING.md)：真实证据、简历表达与高频追问的逐条映射。
-- [`INTERVIEW_GUIDE.md`](INTERVIEW_GUIDE.md)：按模块组织的中文口述稿与面试前自检。
-- [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)：作者自行执行的密钥检查、仓库重命名、推送与 GitHub 展示清单。
+- [`EVAL.md`](EVAL.md)：评测设计、R 轨真实结果与 P/Q 轨执行边界。
+- [`OBSERVABILITY.md`](OBSERVABILITY.md)：trace 事件模型、汇总口径与数据边界。
+- [`TESTING.md`](TESTING.md)：离线测试策略、mock 边界与 live 测试约定。
 
 ## 已知边界与后续路线
 
@@ -397,6 +404,6 @@ tools/        KB Search / Web Search / Web Fetch 等 IO 工具
 - 引用由工作流和 Prompt 组织，尚未实现“证据是否语义支持结论”的自动事实核验。
 - SQLite checkpoint 面向单机演示；多实例部署需要外部共享存储。
 - Streamlit 尚未提供 checkpoint 恢复 UI，当前需通过 API 恢复。
-- P/Q 真实付费对照已转为秋招后可选实验，未运行就不声明并发加速或 Critic 质量收益。
-- Phase 14 的官方 MCP 客户端与 stdio 链路已验证；Claude Code 实际工具调用会把工具结果发送给外部模型，保留为作者显式授权后的可选验收。
+- P/Q 真实付费对照仍是可选实验；未运行就不声明并发加速或 Critic 质量收益。
+- 官方 MCP 客户端与 stdio 链路已验证；Claude Code 实际工具调用会把工具结果发送给外部模型，保留为显式授权后的可选验收。
 - v3 Docker 镜像和 Compose 启动链已在本机验证，包含 Milvus、PostgreSQL 迁移、双路建库及前后端健康；真实付费研究和鉴权开启态未纳入本轮容器验收。GitHub Actions 的绿色徽章仍需作者提交并推送后由远端运行生成。

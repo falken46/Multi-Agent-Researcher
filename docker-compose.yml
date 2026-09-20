@@ -5,7 +5,7 @@ x-index-environment: &index-environment
   # 或把 MILVUS_ENDPOINT 指向 Milvus Lite 的本地文件即可。
   VECTOR_BACKEND: ${VECTOR_BACKEND:-milvus}
   # 变量名是 MILVUS_ENDPOINT 不是 MILVUS_URI —— 后者被 pymilvus 自己占用，
-  # 它在 import 时就读该变量并强制按 http 解析。详见 UPGRADE_V3.md §7.5 坑三。
+  # 它会在 import 时读取该变量并按网络 URI 解析，本地文件路径会导致导入失败。
   MILVUS_ENDPOINT: http://milvus:19530
   MILVUS_COLLECTION: ${MILVUS_COLLECTION:-deepresearch_kb}
   CHROMA_DIR: /app/data/chroma
