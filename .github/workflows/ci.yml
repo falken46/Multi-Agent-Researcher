@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Ruff and pytest
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.3"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Lint
+        run: uv run --frozen ruff check .
+
+      - name: Run offline tests
+        run: uv run --frozen python -m pytest -m "not live"
+
+  database:
+    # 数据库层对着真实 PostgreSQL 再跑一遍。
+    # 模型写成方言中立只是意图，"在 SQLite 上过"不等于"在 PostgreSQL 上过"。
+    # 这个 job 单独存在，是为了让上面的 quality job 保持零外部依赖。
+    name: PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: deepresearch
+          POSTGRES_PASSWORD: deepresearch
+          POSTGRES_DB: deepresearch_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U deepresearch -d deepresearch_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      TEST_DATABASE_URL: postgresql+psycopg://deepresearch:deepresearch@localhost:5432/deepresearch_test
+      DATABASE_URL: postgresql+psycopg://deepresearch:deepresearch@localhost:5432/deepresearch_test
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.11.3"
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen --group dev
+
+      - name: Verify Alembic migrations run on PostgreSQL
+        # 迁移脚本必须在真实 PostgreSQL 上双向可用。
+        # 只在 SQLite 上验证过的迁移，第一次上生产就可能挂在方言差异上。
+        run: |
+          uv run --frozen python -m alembic upgrade head
+          uv run --frozen python -m alembic downgrade base
+          uv run --frozen python -m alembic upgrade head
+
+      - name: Run database tests against PostgreSQL
+        run: uv run --frozen python -m pytest tests/test_db_repository.py -v

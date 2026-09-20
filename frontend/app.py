@@ -117,13 +117,18 @@ def subscribe_research(
     topic: str,
     api_base_url: str = DEFAULT_API_BASE_URL,
     timeout: tuple[float, float] = REQUEST_TIMEOUT,
+    api_key: str = "",
 ) -> Iterator[SSEEvent]:
     """调用后端研究接口,持续产出 SSE 事件。"""
     endpoint = f"{api_base_url.rstrip('/')}/research"
+    headers = {"Accept": "text/event-stream"}
+    normalized_api_key = api_key.strip()
+    if normalized_api_key:
+        headers["X-API-Key"] = normalized_api_key
     with requests.post(
         endpoint,
         json={"topic": topic},
-        headers={"Accept": "text/event-stream"},
+        headers=headers,
         stream=True,
         timeout=timeout,
     ) as response:
@@ -195,6 +200,7 @@ def apply_event_to_view_state(event: SSEEvent, view_state: ViewState) -> ViewSta
 def main() -> None:
     """渲染 Streamlit 页面。"""
     st.set_page_config(page_title="Multi-Agent 研究助手", layout="wide")
+    settings = get_settings()
 
     if "view_state" not in st.session_state:
         st.session_state["view_state"] = create_view_state()
@@ -203,7 +209,7 @@ def main() -> None:
     with st.sidebar:
         api_base_url = st.text_input(
             "后端地址",
-            value=get_settings().backend_url or DEFAULT_API_BASE_URL,
+            value=settings.backend_url or DEFAULT_API_BASE_URL,
         )
 
     with st.form("research_form", clear_on_submit=False):
@@ -223,6 +229,7 @@ def main() -> None:
             _run_research(
                 topic=normalized_topic,
                 api_base_url=api_base_url.strip() or DEFAULT_API_BASE_URL,
+                api_key=settings.frontend_api_key.get_secret_value(),
                 workspace=workspace,
             )
     else:
@@ -230,7 +237,12 @@ def main() -> None:
             _render_workspace(st.session_state["view_state"])
 
 
-def _run_research(topic: str, api_base_url: str, workspace: Any) -> None:
+def _run_research(
+    topic: str,
+    api_base_url: str,
+    api_key: str,
+    workspace: Any,
+) -> None:
     view_state = create_view_state(topic)
     st.session_state["view_state"] = view_state
 
@@ -238,7 +250,11 @@ def _run_research(topic: str, api_base_url: str, workspace: Any) -> None:
         _render_workspace(view_state)
 
     try:
-        for event in subscribe_research(topic=topic, api_base_url=api_base_url):
+        for event in subscribe_research(
+            topic=topic,
+            api_base_url=api_base_url,
+            api_key=api_key,
+        ):
             apply_event_to_view_state(event, view_state)
             st.session_state["view_state"] = view_state
             with workspace.container():
@@ -246,12 +262,22 @@ def _run_research(topic: str, api_base_url: str, workspace: Any) -> None:
             if event["event"] in {"complete", "error"}:
                 break
     except requests.RequestException as exc:
-        error_text = f"前端请求失败: {exc}"
+        error_text = _request_error_message(exc)
         view_state["errors"].append(error_text)
         _mark_node(view_state, "planner", "失败", error_text)
         st.session_state["view_state"] = view_state
         with workspace.container():
             _render_workspace(view_state)
+
+
+def _request_error_message(exc: requests.RequestException) -> str:
+    """把常见 HTTP 失败转换为用户可操作的页面提示。"""
+    if exc.response is not None and exc.response.status_code == 401:
+        return (
+            "前端鉴权失败：请检查 FRONTEND_API_KEY 是否与后端 "
+            "API_KEYS 中配置的 key 一致。"
+        )
+    return f"前端请求失败: {exc}"
 
 
 def _render_workspace(view_state: ViewState) -> None:

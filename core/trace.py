@@ -68,6 +68,14 @@ def emit(event: Mapping[str, Any]) -> None:
             exc,
         )
 
+    # OTel 导出叠加在 JSONL 之后，不是替代。
+    # 放在最后、且 record() 内部吞异常：可观测后端挂了不能拖垮被观测的系统，
+    # 更不能让本地 JSONL 这条主路径受影响。
+    # 延迟导入避免 core.trace 在未装 OTel 的环境下 import 失败。
+    from core import otel
+
+    otel.record(normalized_event, settings=settings)
+
 
 def summarize(trace_id: str) -> dict[str, Any]:
     """从 trace 事件聚合 token、成本、耗时和关键行为指标。"""

@@ -41,6 +41,7 @@ traces/
 .test-runtime/
 data/chroma/
 data/bm25/
+data/checkpoints/
 data/checkpoints.sqlite
 data/checkpoints.sqlite-wal
 data/checkpoints.sqlite-shm
@@ -49,3 +50,30 @@ data/checkpoints.sqlite-shm
 eval/.cache/
 eval/dataset/t2_reranking/
 eval/reports/raw/
+
+# 个人学习材料，不对外发布
+docs/study/
+
+# 本地开发与求职辅助材料，不属于公开产品交付物
+AGENTS.md
+CLAUDE.md
+TASKS.md
+UPGRADE_V3.md
+RELEASE_CHECKLIST.md
+RESUME_MAPPING.md
+INTERVIEW_GUIDE.md
+
+# 本地学习手册站点（与 docs/study 同属个人材料，不对外发布）
+docs/index.html
+docs/_sidebar.md
+docs/_coverpage.md
+docs/_404.md
+docs/README.md
+docs/.nojekyll
+docs/vendor/
+打开学习手册.bat
+
+# Milvus Lite 本地索引（运行时产物）
+data/milvus_lite.db
+data/milvus_lite.db.*
+*.db.lock

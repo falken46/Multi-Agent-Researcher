@@ -1,0 +1,196 @@
+name: deepresearch-agent
+
+x-index-environment: &index-environment
+  # compose 里默认走 Milvus（企业档）。本地无 Docker 时把 VECTOR_BACKEND 设成 chroma，
+  # 或把 MILVUS_ENDPOINT 指向 Milvus Lite 的本地文件即可。
+  VECTOR_BACKEND: ${VECTOR_BACKEND:-milvus}
+  # 变量名是 MILVUS_ENDPOINT 不是 MILVUS_URI —— 后者被 pymilvus 自己占用，
+  # 它会在 import 时读取该变量并按网络 URI 解析，本地文件路径会导致导入失败。
+  MILVUS_ENDPOINT: http://milvus:19530
+  MILVUS_COLLECTION: ${MILVUS_COLLECTION:-deepresearch_kb}
+  CHROMA_DIR: /app/data/chroma
+  BM25_INDEX_PATH: /app/data/bm25/index.pkl
+  KB_DIR: /app/data/kb
+
+x-backend-environment: &backend-environment
+  <<: *index-environment
+  CHECKPOINT_DB: /app/data/checkpoints/checkpoints.sqlite
+  TRACE_DIR: /app/traces
+  # 业务数据落库（Phase 19）。留空则整个持久化层静默跳过，服务照常可用。
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-deepresearch}:${POSTGRES_PASSWORD:-deepresearch}@postgres:5432/${POSTGRES_DB:-deepresearch}
+
+x-index-volumes: &index-volumes
+  - chroma-data:/app/data/chroma
+  - bm25-data:/app/data/bm25
+  - model-cache:/home/app/.cache
+
+x-backend-volumes: &backend-volumes
+  - chroma-data:/app/data/chroma
+  - bm25-data:/app/data/bm25
+  - checkpoint-data:/app/data/checkpoints
+  - trace-data:/app/traces
+  - model-cache:/home/app/.cache
+
+services:
+  # ---- Milvus standalone 需要三个容器：etcd 存元数据、minio 存对象、milvus 本体 ----
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.18
+    command:
+      - etcd
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+    environment:
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "1000"
+      ETCD_QUOTA_BACKEND_BYTES: "4294967296"
+    volumes:
+      - etcd-data:/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  minio:
+    # MinIO 官方 Helm chart 的固定版本从 Quay 发布；Docker Hub 同标签已无法拉取。
+    image: quay.io/minio/minio:RELEASE.2024-12-18T13-15-44Z
+    command: minio server /minio_data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - minio-data:/minio_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  milvus:
+    image: milvusdb/milvus:v2.5.4
+    command: ["milvus", "run", "standalone"]
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+      MINIO_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    volumes:
+      - milvus-data:/var/lib/milvus
+    healthcheck:
+      # indexer 必须等 Milvus 真的能收请求再建索引，否则首次建库直接失败
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    depends_on:
+      etcd:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "${MILVUS_PORT:-19530}:19530"
+    restart: unless-stopped
+
+  indexer:
+    image: deepresearch-agent-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      <<: *index-environment
+      EMBEDDING_BACKEND: ${EMBEDDING_BACKEND:-fastembed}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-small-zh-v1.5}
+      EMBEDDING_REMOTE_URL: ${EMBEDDING_REMOTE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_TIMEOUT: ${EMBEDDING_TIMEOUT:-30}
+      CHROMA_COLLECTION: ${CHROMA_COLLECTION:-deepresearch_kb}
+      CHUNK_SIZE: ${CHUNK_SIZE:-500}
+      CHUNK_OVERLAP: ${CHUNK_OVERLAP:-80}
+      VECTOR_SEARCH_ENABLED: ${VECTOR_SEARCH_ENABLED:-true}
+      BM25_SEARCH_ENABLED: ${BM25_SEARCH_ENABLED:-true}
+    command: ["python", "-m", "rag.index_cli", "--dir", "/app/data/kb"]
+    depends_on:
+      milvus:
+        condition: service_healthy
+    volumes: *index-volumes
+    restart: "no"
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-deepresearch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deepresearch}
+      POSTGRES_DB: ${POSTGRES_DB:-deepresearch}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # backend 必须等库真的能连上再起，否则首次迁移会失败
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-deepresearch} -d ${POSTGRES_DB:-deepresearch}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    image: deepresearch-agent-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment: *backend-environment
+    # 迁移是一次性任务：跑完退出，backend 等它成功才启动。
+    # 不把 alembic 放进 backend 启动脚本，是为了多副本时不会几个进程同时改表结构。
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    image: deepresearch-agent-backend:local
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    env_file:
+      - path: .env
+        required: false
+    environment: *backend-environment
+    depends_on:
+      indexer:
+        condition: service_completed_successfully
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes: *backend-volumes
+    restart: unless-stopped
+
+  frontend:
+    image: deepresearch-agent-frontend:local
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    environment:
+      BACKEND_URL: http://backend:8000
+      # 只把前端自己的 key 注入 Streamlit，不把后端完整 API_KEYS 映射暴露给它。
+      FRONTEND_API_KEY: ${FRONTEND_API_KEY:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8501}:8501"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  etcd-data:
+  minio-data:
+  milvus-data:
+  chroma-data:
+  bm25-data:
+  checkpoint-data:
+  trace-data:
+  model-cache:

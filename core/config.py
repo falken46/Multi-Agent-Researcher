@@ -41,6 +41,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,  # 允许按字段名构造，供带 alias 的字段在测试中直接传参
     )
 
     # LLM
@@ -65,8 +66,21 @@ class Settings(BaseSettings):
     embedding_remote_url: str = ""
     embedding_api_key: SecretStr = SecretStr("")
     embedding_timeout: float = Field(default=30.0, gt=0)
+    # 向量库后端。保留 chroma 是为了 Phase 17 的 A/B 对照，不是历史包袱。
+    vector_backend: Literal["chroma", "milvus"] = "chroma"
     chroma_dir: Path = Path("data/chroma")
     chroma_collection: str = "deepresearch_kb"
+    # ⚠️ 环境变量刻意叫 MILVUS_ENDPOINT 而不是 MILVUS_URI：
+    # pymilvus 自己在 import 时就会读 os.getenv("MILVUS_URI")（见 pymilvus/settings.py），
+    # 并强制按 http[s]://host:port 解析。我们要支持 Milvus Lite 的本地文件路径，
+    # 用同名变量会在 import pymilvus 阶段直接抛 ConnectionConfigException。
+    # 两种形态都支持：http://host:19530（独立服务）或 data/milvus_lite.db（Lite 本地文件）
+    milvus_uri: str = Field(
+        default="http://localhost:19530",
+        validation_alias="MILVUS_ENDPOINT",
+    )
+    milvus_collection: str = "deepresearch_kb"
+    milvus_token: SecretStr = SecretStr("")
     bm25_index_path: Path = Path("data/bm25/index.pkl")
     kb_dir: Path = Path("data/kb")
     chunk_size: int = Field(default=500, gt=0)
@@ -87,12 +101,41 @@ class Settings(BaseSettings):
     quality_threshold: float = Field(default=0.7, ge=0, le=1)
     checkpoint_db: Path = Path("data/checkpoints.sqlite")
 
+    # 业务数据持久化（Phase 19）
+    # 留空 = 不落库，全链路静默跳过。这样没有数据库的机器仍可跑完整离线测试，
+    # 保住 v2 "无外部依赖也能复现" 的既有优点。
+    #   PostgreSQL: postgresql+psycopg://user:pass@localhost:5432/deepresearch
+    #   SQLite    : sqlite:///data/app.db
+    database_url: str = ""
+    db_echo: bool = False
+
+    # 接口鉴权（Phase 20）
+    # 形如 "key1:研究所,key2:合规部"。留空 = 不鉴权，全部放行、actor 记为 anonymous。
+    # 默认关闭是为了保住"clone 下来直接能跑"，也不破坏既有前端与测试。
+    api_keys: str = ""
+
     # 可观测
     trace_dir: Path = Path("traces")
     trace_enabled: bool = True
 
+    # OpenTelemetry 导出（Phase 20）
+    # 留空 = 不导出，只写本地 JSONL。JSONL 永远是主路径，OTel 是叠加的一层，
+    # 这样"没有任何外部服务也能完整跑"这个既有优点不会丢。
+    # 用 OTel 标准而不是绑定某家 SDK：Laminar 是 OTel 原生，Langfuse 也吃 OTel，
+    # 换后端只改 endpoint 与 headers，代码不动。
+    #   Laminar : https://api.lmnr.ai:8443/v1/traces  （或自托管地址）
+    #   Langfuse: https://cloud.langfuse.com/api/public/otel/v1/traces
+    otel_endpoint: str = ""
+    otel_service_name: str = "deepresearch-agent"
+    # 形如 "Authorization=Bearer xxx"，多个用逗号分隔
+    otel_headers: SecretStr = SecretStr("")
+    otel_timeout: float = Field(default=10.0, gt=0)
+
     # 前端
     backend_url: str = "http://127.0.0.1:8000"
+    # Streamlit 作为后端客户端只持有自己的单个 key，不读取服务端完整的 API_KEYS 映射。
+    # 留空时不发送 X-API-Key，与默认关闭鉴权的后端保持兼容。
+    frontend_api_key: SecretStr = SecretStr("")
 
     @model_validator(mode="after")
     def validate_cross_field_constraints(self) -> Settings:
@@ -104,6 +147,10 @@ class Settings(BaseSettings):
             raise ValueError("MODEL_NAME must not be empty")
         if not self.chroma_collection.strip():
             raise ValueError("CHROMA_COLLECTION must not be empty")
+        if not self.milvus_collection.strip():
+            raise ValueError("MILVUS_COLLECTION must not be empty")
+        if self.vector_backend == "milvus" and not self.milvus_uri.strip():
+            raise ValueError("MILVUS_URI must not be empty when VECTOR_BACKEND=milvus")
         if not self.embedding_model.strip():
             raise ValueError("EMBEDDING_MODEL must not be empty")
         if not self.rerank_model.strip():

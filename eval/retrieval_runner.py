@@ -21,17 +21,19 @@ from eval.metrics import aggregate_retrieval_records
 from eval.models import RetrievalGroupSummary, RetrievalObservation
 from eval.retrieval_dataset import (
     DATASET_NAME,
-    DEFAULT_OUTPUT_DIR as DEFAULT_DATASET_DIR,
     PreparedRetrievalDataset,
     RetrievalCase,
     load_prepared_dataset,
+)
+from eval.retrieval_dataset import (
+    DEFAULT_OUTPUT_DIR as DEFAULT_DATASET_DIR,
 )
 from rag.bm25 import BM25Index
 from rag.embeddings import EmbeddingBackend, create_embedding_backend
 from rag.hybrid import rrf_fuse
 from rag.models import RetrievalResult
 from rag.rerank import rerank
-from rag.vectorstore import ChromaVectorStore
+from rag.vectorstore import VectorStore, create_vector_store
 
 RetrievalGroup = Literal["R1", "R2", "R3", "R4"]
 
@@ -96,7 +98,7 @@ def run_retrieval_evaluation(
     if output.exists() and not overwrite:
         raise FileExistsError(f"retrieval raw output already exists: {output}")
 
-    vector_store: ChromaVectorStore | None = None
+    vector_store: VectorStore | None = None
     embedder: EmbeddingBackend | None = None
     bm25_index: BM25Index | None = None
     evaluation_index_dir = Path(index_dir)
@@ -107,6 +109,7 @@ def run_retrieval_evaluation(
             dataset,
             index_dir=evaluation_index_dir / "chroma",
             embedder=embedder,
+            settings=current,
         )
     if _requires_bm25(normalized_groups):
         bm25_index = _build_bm25_index(
@@ -146,12 +149,14 @@ def _build_vector_index(
     *,
     index_dir: Path,
     embedder: EmbeddingBackend,
-) -> ChromaVectorStore:
+    settings: Settings,
+) -> VectorStore:
     embeddings = embedder.embed_documents([chunk.text for chunk in dataset.chunks])
-    store = ChromaVectorStore(
-        index_dir,
-        collection_name="phase13_t2_reranking",
+    store = create_vector_store(
+        settings,
         reset=True,
+        collection_name="phase13_t2_reranking",
+        chroma_dir=index_dir,
     )
     store.add(dataset.chunks, embeddings)
     return store
@@ -173,7 +178,7 @@ def _evaluate_case(
     groups: tuple[RetrievalGroup, ...],
     settings: Settings,
     embedder: EmbeddingBackend | None,
-    vector_store: ChromaVectorStore | None,
+    vector_store: VectorStore | None,
     bm25_index: BM25Index | None,
 ) -> list[dict[str, Any]]:
     channel_results: dict[str, list[RetrievalResult]] = {}

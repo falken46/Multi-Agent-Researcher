@@ -2,16 +2,21 @@
 
 基于 LangGraph 的工程化多智能体研究助手：本地混合检索不足时联网，Critic 定向补查，并以 SSE、SQLite Checkpoint 和任务级 JSONL trace 支撑可观测、可恢复的 Markdown 报告生成流程。
 
-> 当前代码基线已实现 Phase 10—13 的秋招功能范围；Phase 14 已接通 MCP Server、结构化工具 schema 与 stdio 客户端协议测试。P/Q 真实付费运行已转为秋招后可选实验，本文只填写由结构化 raw 复算的公开检索数字，不提前填写质量提升率或真实任务加速比。
+> 当前代码基线已覆盖公开检索评测、MCP Server、PostgreSQL、OpenTelemetry、Docker Compose 与离线 CI。P/Q 真实付费对照保留为可选实验；本文只填写由结构化 raw 或 trace 复算的数字，不提前填写质量提升率或真实任务加速比。
 
 ## 核心能力
 
 - **四 Agent 状态机**：Planner 拆题，Researcher 检索与归纳，Critic 评分并指出缺口，Writer 汇总成报告。
-- **本地优先的混合检索**：Chroma 向量召回与 BM25 关键词召回经 RRF 融合，再按配置执行 rerank；本地检索失败或最高分低于配置阈值时才联网补查。
+- **本地优先的混合检索**：Milvus 向量召回与 BM25 关键词召回经 RRF 融合，再按配置执行 rerank；本地检索失败或最高分低于配置阈值时才联网补查。向量库后端由 `VECTOR_BACKEND` 切换（`milvus` / `chroma`），上层融合与重排逻辑不感知供应商。
 - **受控并发与失败隔离**：Researcher 使用 `asyncio.gather`、`Semaphore`、超时和 `return_exceptions=True` 并发处理独立子问题。
 - **有边界的质量返工**：Critic 只让 Researcher 补查明确缺口，并通过返工上限和分数停滞检测防止死循环。
 - **可观测、可恢复**：JSONL trace 记录节点、token、估算成本、耗时、降级和返工事件；SQLite Checkpoint 通过稳定 `thread_id` 支持 API 从最近 checkpoint 恢复。
+- **业务数据落库**：PostgreSQL 保存任务、子问题、报告与引用来源（含检索名次），任务按 `running → completed / failed` 更新并用 `thread_id` 保持恢复幂等；SQLAlchemy + Alembic 管理表结构与迁移，未配置 `DATABASE_URL` 时整层静默跳过。
+- **OpenTelemetry 导出**：事件流映射为带父子关系的 span（任务为根、Agent 节点为子、llm_call/降级/返工为 span event），可指向任意 OTLP 后端（Laminar、Langfuse 等）；**本地 JSONL 仍是主路径**，未配置 endpoint 时完全不介入。已用 Langfuse Cloud 完成一次真实 OTLP 接收验证。
+- **调用主体可追溯**：API Key 鉴权解析出的 actor 写入 trace 事件与任务记录 —— v2 记了模型/token/成本，唯独缺"是谁在调"。
+- **增量关键词索引**：BM25 缓存分词结果，追加文档只对新增内容分词（引擎因 IDF 依赖全语料仍需重建，这是 `rank_bm25` 的限制）。
 - **HTTP + MCP 双入口**：FastAPI/SSE 面向 Web 前端，官方 MCP SDK v2 暴露 `deep_research` 与只读 `kb_search`，供 LLM 客户端发现和调用。
+- **容器化交付与 CI**：多阶段镜像、非 root 运行、健康检查、持久化卷与自动建库组成一键启动链；GitHub Actions 使用锁文件执行 Ruff 和离线 pytest。
 - **离线可回归**：默认测试不依赖 API Key 或网络，检索测试使用确定性 fake embedding。
 
 ## 系统架构
@@ -41,11 +46,14 @@ LangGraph StateGraph ◄──────► AsyncSqliteSaver（SQLite Checkpoi
 上述所有 Writer 分支 → END
 
 离线建库：data/kb → Loader → Splitter
-                              ├─ Embedding → Chroma
+                              ├─ Embedding → Milvus（可切 Chroma）
                               └─ jieba → BM25 Index
 
-在线查询：Researcher → tools/kb_search.py → Chroma + BM25 → RRF → 可选 Rerank
+在线查询：Researcher → tools/kb_search.py → Milvus + BM25 → RRF → 可选 Rerank
                └─ 本地检索失败或分数不足 → tools/web_search.py
+
+任务收尾：backend/streaming.py → db/persistence.py → PostgreSQL
+          （research_tasks / sub_questions / reports / citations）
 
 Planner / Researcher / Critic / Writer
  └─ core/llm.py → 统一模型调用、重试、token 与估算成本记录
@@ -55,7 +63,13 @@ LLM 客户端 → MCP stdio → mcp_server/server.py
                          └─ kb_search → tools/kb_search.py → 同一 RAG 流水线
 ```
 
-图中的两类持久化职责不同：Checkpoint 保存 LangGraph 状态，用来继续未完成任务；trace 保存运行事件，用来排查问题和汇总用量，二者不能互相替代。
+图中的三类持久化职责不同，互相不能替代：
+
+| 存的东西 | 存在哪 | 用来干什么 |
+|---|---|---|
+| LangGraph 状态 | SQLite Checkpoint | 继续未完成的任务 |
+| 运行事件、token、耗时 | JSONL trace | 排查问题、汇总用量 |
+| 业务数据（任务/报告/引用） | PostgreSQL | 事后查询、统计、追溯引用名次 |
 
 ## 快速开始
 
@@ -90,6 +104,10 @@ Copy-Item .env.example .env
 DEEPSEEK_API_KEY=sk-xxx
 TAVILY_API_KEY=tvly-xxx
 
+# 可选：启用接口鉴权时，两处 key 要一致；冒号后是写入 trace/任务记录的 actor
+API_KEYS=local-demo-key:本地前端
+FRONTEND_API_KEY=local-demo-key
+
 EMBEDDING_BACKEND=fastembed
 RERANK_BACKEND=onnx
 TRACE_ENABLED=true
@@ -103,7 +121,9 @@ TRACE_ENABLED=true
 uv run python -m rag.index_cli --dir data/kb
 ```
 
-默认索引写入 `data/chroma/` 和 `data/bm25/`，它们是可重建的运行时数据，不进入 Git。建库结束后应确认输出中的向量数量与 BM25 数量都大于 0。
+向量索引默认写入 Milvus（`VECTOR_BACKEND=chroma` 时写 `data/chroma/`），关键词索引写 `data/bm25/`。它们都是可重建的运行时数据，不进入 Git。建库结束后应确认输出中的向量数量与 BM25 数量都大于 0。
+
+本机没有 Docker 时，把 `MILVUS_ENDPOINT` 指向一个本地文件（如 `data/milvus_lite.db`）即可用 Milvus Lite 跑通同一套代码，无需起服务。
 
 > `--embedding-backend fake` 只覆盖当次建库命令，适合隔离测试，不代表应用运行时也会切换为 fake。建库与查询必须使用相同的 embedding 后端和模型；切换后请更新 `.env` 并重新执行上述建库命令，否则可能出现维度不匹配或检索结果失真。
 
@@ -123,9 +143,55 @@ uv run streamlit run frontend/app.py --server.address 127.0.0.1 --server.port 85
 
 浏览器打开 `http://127.0.0.1:8501`。后端健康检查为 `GET /health`，交互式接口文档位于 `http://127.0.0.1:8000/docs`。
 
+`API_KEYS` 留空时保持默认免鉴权行为。启用后，Streamlit 会从 `FRONTEND_API_KEY` 读取单个客户端凭据并发送 `X-API-Key`；它不会读取后端完整的 key 与 actor 映射。若两处不匹配，页面会明确提示配置问题。
+
+### 6. 使用 Docker Compose 一键启动
+
+先准备 `.env`，再启动整个系统：
+
+```bash
+docker compose up --build
+```
+
+Compose 会按以下顺序执行：
+
+```text
+etcd + minio  ──healthy──→ milvus ──healthy──┐
+                                             ├─→ indexer 全量构建 Milvus + BM25 ──成功──┐
+postgres ──healthy──→ migrate（alembic upgrade head）──成功──────────────────────────┤
+                                                                                     └─→ backend
+                                                                                          └─ /health 通过 → frontend
+```
+
+`migrate` 是一次性任务，跑完即退出。**不把 alembic 放进 backend 的启动脚本**，是为了多副本时不会有几个进程同时改表结构。
+
+浏览器仍访问 `http://127.0.0.1:8501`。Milvus 数据、BM25、PostgreSQL 数据、SQLite checkpoint、JSONL trace 与模型缓存位于 Docker 命名卷，重建容器不会丢失；`docker compose down` 只停止并移除容器与网络，不删除这些卷。
+
+当前首版会在每次 `up` 时全量重建 44 篇小型产品知识库。这样牺牲少量启动时间，换取了索引与当前语料、切分配置始终一致，也避免额外维护一套“索引是否过期”判断逻辑。
+
+如果 Windows 上的项目绝对路径包含中文，个别 Docker Desktop / Compose Bake 版本可能在 `docker compose build` 阶段报告 `non-printable ASCII` header。可以把仓库放到纯英文路径，或用以下等价方式绕过 Compose 的 Bake 层：
+
+```bash
+docker buildx build --load -f Dockerfile.backend -t deepresearch-agent-backend:local .
+docker buildx build --load -f Dockerfile.frontend -t deepresearch-agent-frontend:local .
+docker compose up --no-build
+```
+
+### 7. 本地执行 CI 同款检查
+
+```bash
+uv sync --frozen --group dev
+uv run --frozen ruff check .
+uv run --frozen python -m pytest -m "not live"
+```
+
+GitHub Actions 在 push 与 pull request 时执行同样的质量门禁。工作流不会注入 DeepSeek、Tavily 或其他私密 Key；需要真实网络或付费服务的测试必须显式标记 `@pytest.mark.live`，并被 CI 排除。
+
 ## API、SSE 与断点恢复
 
 新任务最安全的做法是只传主题，让后端生成唯一 `thread_id`。以下命令适用于 Bash / Git Bash：
+
+如果后端配置了 `API_KEYS`，手工调用还需增加 `-H "X-API-Key: <key>"`；未启用鉴权时可省略。
 
 ```bash
 curl -N -X POST http://127.0.0.1:8000/research \
@@ -151,6 +217,16 @@ Windows PowerShell 5 / 7 可使用 `curl.exe`；示例使用英文主题以避�
 ```
 
 当前恢复入口只在后端 API 提供，Streamlit 页面尚无恢复控件。`resume=true` 必须携带 `thread_id`，且主题必须与已保存任务完全一致。
+
+配置 `DATABASE_URL` 后还可查询任务历史：
+
+| 接口 | 作用 |
+|---|---|
+| `GET /tasks` | 按开始时间倒序列出任务 |
+| `GET /tasks/{thread_id}` | 查询任务状态与子问题 |
+| `GET /tasks/{thread_id}/report` | 读取最新报告与带名次的引用 |
+
+后端在返回 `start` SSE 前按 `thread_id` 写入 `running`；正常结束更新为 `completed`，图执行或 checkpoint 恢复异常则更新为 `failed`。恢复同一任务会更新原记录，不新增重复任务。未配置数据库时，这三个历史接口返回 503，研究主流程仍可运行。
 
 SSE 可能发送以下事件：
 
@@ -230,19 +306,34 @@ uv run python -m mcp_server.server
 当前分支全量离线回归结果为：
 
 ```text
-140 passed
+210 passed
 ```
 
-这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、MCP schema/协议入口、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
+这组测试覆盖配置、统一 LLM 入口、trace、检索流水线、公开数据转换、R1—R4 runner、报告重算、四个 Agent、反思回环、并发边界、SSE、MCP schema/协议入口、Docker/Compose/CI 配置契约、前端状态和关闭后重开的 SQLite 恢复。它证明实现满足这些确定性场景，**不等于**真实模型准确率、联网稳定性或生产性能；真实检索数字来自单独保存的结构化评测 raw。
+
+### 真实 Langfuse Trace
+
+下面是一次真实研究任务通过通用 OTLP HTTP exporter 写入 Langfuse Cloud 的 Trace。根 Span 下能看到 Planner、Researcher、Critic 与 Writer；第一次 Researcher 因本地模型冷启动超时而失败，随后重试成功，因此失败标记与重试链路也被完整保留。
+
+![Langfuse OpenTelemetry Trace](docs/langfuse-trace.png)
+
+该截图用于证明 endpoint、鉴权、OTLP 协议和 Span 层级在真实后端可用，**不是性能基准**。这次单任务共记录 8 次 LLM 调用、32,347 tokens、5 次联网降级、约 ¥0.0431 估算成本和 4 分 51 秒端到端耗时；其中冷启动超时显著放大了总耗时，不能外推为常态性能。
 
 | 维度 | 当前已有证据 | 现在可以得出的结论 | 边界 / 可选后续 |
 |---|---|---|---|
-| 功能回归 | 140 项离线测试 | 约定的本地场景可重复通过 | 真实 LLM / 搜索端到端完成率 |
+| 功能回归（v2 基线） | 148 项离线测试 | v2 约定功能路径可重复通过 | 真实 LLM / 搜索端到端完成率 |
 | 检索链路 | 100 题公开 qrels、1,664 passage、400 条结构化观测，六项指标 | 混合检索与重排在该基准上均未取得普遍收益 | 产品知识库外推与 reranker 模型匹配分析 |
 | 并发研究 | fake IO + P1/P2 固定任务 runner 测试 | 并发上限、配对任务和续跑边界生效 | 相同真实任务的串行 / 并行耗时对照 |
 | Critic 回环 | 确定性图场景 + Q1/Q2 runner 测试 | 返工路由与 Critic 独立开关生效 | 15 题两轮的完成率与质量变化 |
 | 成本观测 | LLM / trace 汇总测试 | token 与配置价格估算链路可追踪 | 固定评测集上的平均 token、成本和耗时 |
 | MCP 接口 | 官方 SDK 客户端进程内协议测试 + 真实 stdio 子进程握手/调用 | 两个工具可发现，schema 可读，`kb_search` 返回结构化结果 | Claude Code 发送本地工具结果前仍需作者显式授权 |
+| 功能回归（v3） | 210 项离线测试（148 基线 + 62 新增） | Milvus 适配器、数据库层、OTel 导出、增量索引、鉴权、前端凭据透传与任务生命周期在约定场景下可重复通过 | — |
+| 向量库迁移 | 100 题公开基准上 R1/R2/R3 共 18 项指标，Milvus 与 Chroma 记录逐项一致（最大偏差 0.000045，即报告的四位小数精度） | 换向量库没有改变检索结果，迁移正确 | R4 未重跑：它只重排 R3 的同一候选集，且需下载 cross-encoder 权重 |
+| 数据库层 | 11 项 db 测试（SQLite）；真实 PostgreSQL 容器完成两版 Alembic upgrade，`GET /tasks` 返回 200 | CRUD 语义在 SQLite 可重复通过；PostgreSQL 建表、连接和查询入口已在本机跑通 | 同一套 db 测试在真实 PostgreSQL 上的自动回归仍由 CI `database` job 承担，远端未跑过不声明绿色 |
+| OTel 导出 | 12 项内存 exporter 测试 + 1 次 Langfuse Cloud 真实任务；截图见上方 | span 父子关系、事件挂载、真实 endpoint 鉴权与 OTLP 接收均已跑通；失败后重试在同一 Trace 可见 | 只验证了一个真实任务，不代表生产稳定性；接的是通用 OTLP，不是 Langfuse 专用 SDK |
+| 增量索引 | 8 项测试，含"增量结果与全量重建等价"与分词调用次数断言 | 追加不改变排序与分数，且旧文档不重复分词 | 只在 128 切片规模验证；这是增量分词不是增量 BM25 |
+| 接口、鉴权与生命周期 | 17 项测试（401/404/503、前端请求头、401 页面提示、actor 落库、`running/completed/failed`、恢复幂等） | 调用主体、前后端鉴权契约、任务状态与历史查询接口行为符合约定 | 明文 key、无轮换、无权限分级，不是生产级方案 |
+| 容器交付 | **v3 本机实跑**：PostgreSQL 两版迁移成功；44 篇 → 128 chunk，Milvus / BM25 各 128 条；backend / frontend 均 healthy 且 HTTP 200 | `postgres → migrate` 与 `etcd + minio → milvus → indexer → backend → frontend` 两条门控链成立 | Compose 实跑未覆盖 API 鉴权；真实付费研究由宿主机单独完成；中文路径需用文档中的 buildx 绕过 Compose Bake |
 
 Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query，将 positive 与 hard negative 合并为 1,664 个 passage 的共享池，并直接沿用公开 qrels。正式 R 轨生成 400 条结构化观测：
 
@@ -266,7 +357,11 @@ Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query
 | 决策 | 为什么这样做 | 代价 / 边界 |
 |---|---|---|
 | LangGraph 条件图 | 显式表达节点、循环、条件边与恢复点 | 引入框架概念和状态 schema 维护成本 |
-| Chroma + BM25 + RRF | 同时覆盖语义相近与关键词精确匹配，RRF 无需直接比较异构分数 | 需要维护两套索引并用评测校准参数 |
+| Milvus + BM25 + RRF | 同时覆盖语义相近与关键词精确匹配，RRF 无需直接比较异构分数 | 需要维护两套索引并用评测校准参数 |
+| Milvus 取代 Chroma，但保留 Chroma 分支 | 企业侧向量库更常见；保留旧后端是为了做 A/B 对照，验证换库没有改变检索结果 | **本项目语料只有百余 chunk，Chroma 完全够用**——换库是技术栈对口而非性能需要，代价是多三个容器（milvus + etcd + minio） |
+| PostgreSQL + SQLAlchemy + Alembic | 任务、报告与引用需要事后查询和追溯；有迁移脚本才能安全改表结构 | 多一个外部依赖；`DATABASE_URL` 留空时整层跳过，保住无依赖离线回归 |
+| `citations` 存检索名次 | 事后要能回答「当时为什么是这条排第一」——索引重建后就再也复原不了 | 上游 `Citation` 暂未携带分数，`retrieval_score` 取不到时留空而非填 0 |
+| 落库失败只告警不中断 | 研究助手丢一条记录不是灾难，但因落库失败让用户拿不到报告不可接受 | 需要靠日志发现写入异常；合规类场景应改为写不进就中止 |
 | 本地优先、低分联网 | 优先利用可控语料，仅在证据不足时承担联网成本 | 阈值目前仍需正式评测校准 |
 | `asyncio` + `Semaphore` | 并发独立 IO 子问题，同时限制资源和 API 压力 | 必须配套超时、限流与异常隔离 |
 | Critic 定向返工 | 将“研究证据不足”转换为可检索的明确缺口 | Critic 分数不是第三方质量结论，需对照实验验证收益 |
@@ -274,6 +369,8 @@ Phase 13 已接入公开中文 `C-MTEB/T2Reranking`：固定抽取 100 个 query
 | 统一 LLM Gateway | 集中重试、计量、价格估算和 trace | 公共入口成为需要重点测试的关键模块 |
 | 离线 fake embedding | 自动化回归不依赖网络、模型下载和 API Key | 只能验证确定性逻辑，不能代表真实检索质量 |
 | 官方 MCP SDK v2 | 用标准工具发现、JSON Schema 与 stdio transport 服务 LLM 客户端 | `deep_research` 可能产生模型/联网费用；项目包使用 `mcp_server` 避免遮蔽第三方 `mcp` |
+| 多阶段镜像 + Compose 启动门控 | 依赖锁定在构建阶段，运行阶段非 root；索引完成和后端健康后才启动下游 | 前后端当前复用完整运行依赖，镜像约 324 MB；小语料每次启动全量重建索引 |
+| Ruff + 离线 pytest CI | push / PR 自动阻止未使用导入、导入漂移和功能回归，且不需要任何 API Key | 真实联网与付费路径必须在本地以 `live` 测试或 smoke 单独验证 |
 
 ## 目录结构
 
@@ -284,6 +381,7 @@ core/         集中配置、LLM Gateway、成本估算、trace、checkpoint
 data/kb/      Git 可追踪的本地知识库源语料
 eval/         公开检索集转换、端到端题集、指标与报告
 frontend/     Streamlit 任务进度与报告页面
+.github/      push / PR 的 Ruff + 离线 pytest 工作流
 mcp_server/   MCPServer、deep_research / kb_search 与 stdio 入口
 prompts/      四个 Agent 与 LLM reranker 的 system prompt
 rag/          加载、切分、embedding、双路召回、RRF 与 rerank
@@ -293,11 +391,12 @@ tools/        KB Search / Web Search / Web Fetch 等 IO 工具
 
 ## 文档导航
 
-- [`ARCHITECTURE.md`](ARCHITECTURE.md)：分层架构、状态机与后续演进设计（其中部分目录属于未来 Phase）。
+- [`ARCHITECTURE.md`](ARCHITECTURE.md)：分层架构、状态机、容器拓扑与关键技术决策。
+- [`PRD.md`](PRD.md)：产品范围、用户场景、功能与非功能需求。
 - [`TECH_STACK.md`](TECH_STACK.md)：技术选型、配置来源和运行约束。
-- [`TASKS.md`](TASKS.md)：Phase 10—16 的实施顺序与验收标准。
-- [`EVAL.md`](EVAL.md)：Phase 13 评测设计、R 轨真实结果与 P/Q 轨执行边界。
-- [`RESUME_MAPPING.md`](RESUME_MAPPING.md)：代码证据与简历表达草案，量化占位符需等待真实评测回填。
+- [`EVAL.md`](EVAL.md)：评测设计、R 轨真实结果与 P/Q 轨执行边界。
+- [`OBSERVABILITY.md`](OBSERVABILITY.md)：trace 事件模型、汇总口径与数据边界。
+- [`TESTING.md`](TESTING.md)：离线测试策略、mock 边界与 live 测试约定。
 
 ## 已知边界与后续路线
 
@@ -305,6 +404,6 @@ tools/        KB Search / Web Search / Web Fetch 等 IO 工具
 - 引用由工作流和 Prompt 组织，尚未实现“证据是否语义支持结论”的自动事实核验。
 - SQLite checkpoint 面向单机演示；多实例部署需要外部共享存储。
 - Streamlit 尚未提供 checkpoint 恢复 UI，当前需通过 API 恢复。
-- P/Q 真实付费对照已转为秋招后可选实验，未运行就不声明并发加速或 Critic 质量收益。
-- Phase 14 的官方 MCP 客户端与 stdio 链路已验证；Claude Code 实际工具调用会把工具结果发送给外部模型，需作者显式授权后再完成。
-- Phase 15 的 Docker 与 CI 尚未实现。
+- P/Q 真实付费对照仍是可选实验；未运行就不声明并发加速或 Critic 质量收益。
+- 官方 MCP 客户端与 stdio 链路已验证；Claude Code 实际工具调用会把工具结果发送给外部模型，保留为显式授权后的可选验收。
+- v3 Docker 镜像和 Compose 启动链已在本机验证，包含 Milvus、PostgreSQL 迁移、双路建库及前后端健康；真实付费研究和鉴权开启态未纳入本轮容器验收。GitHub Actions 的绿色徽章仍需作者提交并推送后由远端运行生成。

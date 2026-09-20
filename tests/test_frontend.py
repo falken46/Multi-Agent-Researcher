@@ -263,6 +263,67 @@ def test_subscribe_research_posts_to_backend(monkeypatch: pytest.MonkeyPatch) ->
     assert events == [{"event": "start", "data": {"node": "start"}}]
 
 
+def test_subscribe_research_sends_api_key_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def iter_lines(self, decode_unicode: bool):
+            return iter([])
+
+    def fake_post(url, json, headers, stream, timeout):
+        assert headers == {
+            "Accept": "text/event-stream",
+            "X-API-Key": "frontend-secret",
+        }
+        return FakeResponse()
+
+    monkeypatch.setattr(frontend_app.requests, "post", fake_post)
+
+    assert list(frontend_app.subscribe_research("AI Agent", api_key=" frontend-secret ")) == []
+
+
+def test_streamlit_app_explains_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
+    class UnauthorizedResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback) -> None:
+            return None
+
+        def raise_for_status(self) -> None:
+            response = requests.Response()
+            response.status_code = 401
+            raise requests.HTTPError("401 Client Error", response=response)
+
+    def fake_post(url, json, headers, stream, timeout):
+        assert headers["X-API-Key"] == "wrong-key"
+        return UnauthorizedResponse()
+
+    monkeypatch.setenv("FRONTEND_API_KEY", "wrong-key")
+    monkeypatch.setattr(requests, "post", fake_post)
+    app_path = Path(__file__).parents[1] / "frontend" / "app.py"
+
+    app = AppTest.from_file(str(app_path))
+    app.run(timeout=5)
+    app.text_input[0].set_value("AI Agent")
+    app.button[0].click()
+    app.run(timeout=10)
+
+    assert any(
+        "FRONTEND_API_KEY" in error.value and "API_KEYS" in error.value
+        for error in app.error
+    )
+
+
 def test_streamlit_app_runs_research_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeResponse:
         def __enter__(self):

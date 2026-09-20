@@ -26,7 +26,7 @@ from core.config import Settings, get_settings
 from core.trace import emit, new_trace_id, read_events, summarize
 from eval.models import CoverConcept, TaskObservation, TaskTrack
 from eval.query_cache import CacheMode, QueryCache, QueryCacheError, SearchFetcher
-from tools.web_search import SearchProvider, SearchResult, web_search
+from tools.web_search import SearchResult, web_search
 
 OrchestrationGroup = Literal["P1", "P2", "Q1", "Q2"]
 CaseType = Literal["kb", "web", "mixed"]

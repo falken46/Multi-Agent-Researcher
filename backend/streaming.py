@@ -11,6 +11,7 @@ from agents.graph import build_graph, create_initial_state
 from agents.state import ResearchState, Usage
 from core.checkpoint import open_sqlite_checkpointer
 from core.trace import emit, summarize
+from db.persistence import persist_research_run
 
 logger = logging.getLogger(__name__)
 _MISSING = object()
@@ -22,6 +23,7 @@ async def stream_research_progress(
     *,
     thread_id: str | None = None,
     resume: bool = False,
+    actor: str = "anonymous",
 ) -> AsyncIterator[dict[str, str]]:
     """运行或恢复 LangGraph，并把状态更新转换成 SSE 事件。"""
     normalized_topic = topic.strip()
@@ -42,6 +44,7 @@ async def stream_research_progress(
                     current_state=current_state,
                     thread_id=run_thread_id,
                     resume=resume,
+                    actor=actor,
                 ):
                     yield event
         else:
@@ -50,6 +53,7 @@ async def stream_research_progress(
                 current_state=current_state,
                 thread_id=run_thread_id,
                 resume=resume,
+                actor=actor,
             ):
                 yield event
     except Exception as exc:
@@ -70,6 +74,16 @@ async def stream_research_progress(
                 "payload": {"status": "failed", "thread_id": run_thread_id},
             }
         )
+        # 异常路径也必须结束业务生命周期。先从已经写下的 trace 聚合本次用量，
+        # 再按同一 thread_id 更新为 failed；持久化层自身 fail-open，不会遮蔽原异常。
+        trace_summary = summarize(trace_id)
+        current_state["usage"] = _usage_from_trace(trace_summary)
+        persist_research_run(
+            thread_id=run_thread_id,
+            state=current_state,
+            status="failed",
+            actor=actor,
+        )
         yield _sse_event(
             event="error",
             payload={
@@ -89,6 +103,7 @@ async def _stream_with_graph(
     current_state: ResearchState,
     thread_id: str,
     resume: bool,
+    actor: str = "anonymous",
 ) -> AsyncIterator[dict[str, str]]:
     config = {"configurable": {"thread_id": thread_id}}
     graph_input: ResearchState | None = current_state
@@ -124,8 +139,18 @@ async def _stream_with_graph(
                 "topic": current_state["topic"],
                 "thread_id": thread_id,
                 "resume": resume,
+                # 调用主体：v2 的 trace 记了模型/token/耗时/成本，唯独没有"谁在调"
+                "actor": actor,
             },
         }
+    )
+    # 在返回 start SSE 之前先写 running，使客户端拿到 thread_id 后立刻就能从
+    # /tasks/{thread_id} 查到任务。相同 thread_id 的恢复请求会更新原记录而非新增。
+    persist_research_run(
+        thread_id=thread_id,
+        state=current_state,
+        status="running",
+        actor=actor,
     )
     yield _sse_event(
         event="start",
@@ -191,7 +216,7 @@ async def _stream_with_graph(
         {
             "trace_id": trace_id,
             "event": "task_end",
-            "payload": {"status": final_status, "thread_id": thread_id},
+            "payload": {"status": final_status, "thread_id": thread_id, "actor": actor},
         }
     )
     trace_summary = summarize(trace_id)
@@ -208,6 +233,14 @@ async def _stream_with_graph(
             "thread_id": thread_id,
             "trace_id": trace_id,
         },
+    )
+    # 落库放在 complete 事件之前：这样报告落库后用户才看到"完成"。
+    # persist_research_run 内部吞异常（fail-open），不会挡住下面的响应。
+    persist_research_run(
+        thread_id=thread_id,
+        state=current_state,
+        status="completed" if final_status == "completed" else "failed",
+        actor=actor,
     )
     yield _sse_event(
         event="complete",
